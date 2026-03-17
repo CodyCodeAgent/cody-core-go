@@ -1,6 +1,6 @@
 # Cody Core Go — 基于 Eino 实现 Pydantic AI 设计文档
 
-> 版本：v0.2 Draft
+> 版本：v0.3 Draft
 > 日期：2026-03-17
 > 模块名：`github.com/codycode/cody-core-go`（暂定）
 > 底层框架：[cloudwego/eino](https://github.com/cloudwego/eino) v0.8.x
@@ -139,14 +139,19 @@ cody-core-go/
 │   ├── context.go                      # RunContext[D] 依赖注入
 │   ├── options.go                      # AgentOption / RunOption
 │   ├── result.go                       # Result[O] / StreamResult[O]
-│   └── retry.go                        # ErrModelRetry / 重试逻辑
+│   ├── retry.go                        # ErrModelRetry / 重试逻辑
+│   ├── conversation.go                 # Conversation[D, O] 多轮对话封装
+│   └── union.go                        # OneOf2 / OneOf3 Union 输出类型
 │
 ├── output/                             # 核心：结构化输出系统
 │   ├── output.go                       # OutputMode (Tool/Native/Prompted)
-│   ├── schema.go                       # struct → JSON Schema 自动生成
+│   ├── schema.go                       # struct → JSON Schema 自动生成（支持 struct/原始类型/切片）
 │   ├── validator.go                    # OutputValidator + 验证重试
 │   ├── tool_output.go                  # Tool 模式实现（生成 output tool）
 │   └── native_output.go               # Native 模式实现（模型原生 structured output）
+│
+├── direct/                             # 直接模型请求（绕过 Agent）
+│   └── direct.go                       # RequestText / Request[T] 轻量封装
 │
 ├── deps/                               # 核心：依赖注入辅助
 │   └── deps.go                         # RunContext 工具函数、依赖提取
@@ -447,6 +452,275 @@ type FunctionModel struct {
 func NewFunctionModel(handler func([]*schema.Message, []*schema.ToolInfo) (*schema.Message, error)) *FunctionModel
 ```
 
+### 5.9 Direct Model Requests — 直接模型请求
+
+有时只需要做一次简单的 LLM 调用，不需要 Agent 的完整机制（tool、retry、结构化输出都不需要）。提供一组轻量级的 `direct` 包函数，绕过 Agent 直接调用模型。
+
+```go
+package direct
+
+import (
+    "context"
+
+    "github.com/cloudwego/eino/components/model"
+)
+
+// RequestText 最简调用，返回纯文本
+func RequestText(ctx context.Context, chatModel model.ChatModel, prompt string, opts ...RequestOption) (string, error)
+
+// Request 带结构化输出的直接调用
+// 内部：构建 messages + output tool → chatModel.Generate → 反序列化为 T
+func Request[T any](ctx context.Context, chatModel model.ChatModel, prompt string, opts ...RequestOption) (T, error)
+
+// RequestOption 可选参数
+func WithSystemPrompt(prompt string) RequestOption
+func WithMessages(msgs []*schema.Message) RequestOption   // 自定义消息列表
+func WithModelSettings(settings map[string]any) RequestOption
+```
+
+**使用示例：**
+
+```go
+// 一行搞定纯文本请求
+text, err := direct.RequestText(ctx, chatModel, "翻译这段话为英文：你好世界")
+
+// 一行搞定结构化输出
+type Sentiment struct {
+    Label string  `json:"label" description:"positive/negative/neutral"`
+    Score float64 `json:"score" description:"confidence 0-1"`
+}
+
+result, err := direct.Request[Sentiment](ctx, chatModel, "分析这段文本的情感倾向：我很开心")
+fmt.Println(result.Label, result.Score) // positive 0.95
+```
+
+**内部实现很轻**：构建 system + user message → 如果 T != string 则追加一个 output tool → 调用 `chatModel.Generate` → 解析返回。本质就是 Agent.Run 的单次调用简化版，不含 tool 执行、retry 等循环逻辑。
+
+### 5.10 Tool `prepare` 回调 — 动态参数裁剪
+
+有些场景下，同一个 tool 需要根据运行时上下文动态修改其参数 schema。例如根据用户权限决定是否暴露某些高级参数。
+
+```go
+package agent
+
+// PrepareFunc 在每次 tool 调用前执行，可动态修改 tool 的 JSON Schema
+type PrepareFunc[D any] func(ctx *RunContext[D], schema *output.JSONSchema) (*output.JSONSchema, error)
+
+// WithToolFunc 增加 prepare 选项
+func WithToolFunc[D, O any, Args any](
+    name, desc string,
+    fn func(ctx *RunContext[D], args Args) (string, error),
+    opts ...ToolOption[D],                      // 新增
+) Option[D, O]
+
+// ToolOption 工具级选项
+func WithPrepare[D any](fn PrepareFunc[D]) ToolOption[D]
+```
+
+**使用示例：**
+
+```go
+type SearchArgs struct {
+    Query       string `json:"query" description:"搜索关键词"`
+    AdminFilter string `json:"admin_filter,omitempty" description:"管理员过滤条件"`
+}
+
+myAgent := agent.New[MyDeps, string](chatModel,
+    agent.WithToolFunc[MyDeps, string, SearchArgs](
+        "search", "搜索数据库",
+        func(ctx *agent.RunContext[MyDeps], args SearchArgs) (string, error) {
+            // ... 执行搜索
+            return results, nil
+        },
+        agent.WithPrepare[MyDeps](func(ctx *agent.RunContext[MyDeps], schema *output.JSONSchema) (*output.JSONSchema, error) {
+            if !ctx.Deps.IsAdmin {
+                delete(schema.Properties, "admin_filter")  // 非管理员看不到这个参数
+            }
+            return schema, nil
+        }),
+    ),
+)
+```
+
+**实现要点：** 在 Agent Loop 的步骤 5（调用 chatModel.Generate）之前，遍历所有带 prepare 回调的 tool，动态生成本轮的 tool schema 列表。
+
+### 5.11 Union 输出类型 — OneOf2/OneOf3
+
+当一个 Agent 可能返回多种不同结构的结果时（例如成功/失败，或多种分类），使用 Union 输出类型。
+
+**核心思路：** 给每种类型生成一个独立的 output tool（`final_result_TypeA`、`final_result_TypeB`），模型根据实际情况选择调用哪个，框架按对应类型反序列化。
+
+```go
+package agent
+
+// OneOf2 表示"二选一"的输出类型
+type OneOf2[A, B any] struct {
+    value any  // 实际存的是 A 或 B
+}
+
+// Value 返回内部值，用于 type switch
+func (u OneOf2[A, B]) Value() any { return u.value }
+
+// Match 编译期强制处理所有分支
+func (u OneOf2[A, B]) Match(onA func(A), onB func(B)) {
+    switch v := u.value.(type) {
+    case A:
+        onA(v)
+    case B:
+        onB(v)
+    }
+}
+
+// OutputTools 框架内部调用，生成多个 output tool
+func (u OneOf2[A, B]) OutputTools() []einotool.BaseTool {
+    return []einotool.BaseTool{
+        output.GenerateOutputTool[A]("final_result_" + typeName[A]()),
+        output.GenerateOutputTool[B]("final_result_" + typeName[B]()),
+    }
+}
+
+// OneOf3 三选一，以此类推
+type OneOf3[A, B, C any] struct { value any }
+```
+
+**使用示例：**
+
+```go
+type VulnFound struct {
+    Vulnerability string `json:"vulnerability" description:"漏洞类型"`
+    Severity      string `json:"severity" description:"严重程度" enum:"low,medium,high,critical"`
+    Line          int    `json:"line" description:"出现行号"`
+}
+
+type Safe struct {
+    Summary      string   `json:"summary" description:"安全摘要"`
+    CheckedItems []string `json:"checked_items" description:"已检查项目"`
+}
+
+reviewer := agent.New[MyDeps, agent.OneOf2[VulnFound, Safe]](chatModel,
+    agent.WithSystemPrompt[MyDeps, agent.OneOf2[VulnFound, Safe]](
+        "你是安全审查专家，检查代码安全性",
+    ),
+)
+
+result, err := reviewer.Run(ctx, "检查这段代码", deps)
+
+// 方式一：type switch
+switch v := result.Output.Value().(type) {
+case VulnFound:
+    fmt.Printf("发现漏洞: %s (行 %d, 严重: %s)\n", v.Vulnerability, v.Line, v.Severity)
+case Safe:
+    fmt.Printf("安全: %s\n", v.Summary)
+}
+
+// 方式二：Match（编译期保证所有分支都被处理）
+result.Output.Match(
+    func(v VulnFound) { alertTeam(v) },
+    func(s Safe)      { log.Info(s.Summary) },
+)
+```
+
+**优势：** 比起一个大 struct 里塞一堆 optional 字段，Union 类型让每种输出都有精确的 schema，模型生成更准确，代码处理更清晰。
+
+### 5.12 原始类型输出 — int/bool/[]string 等
+
+除了 struct，Agent 的输出类型 `O` 也支持 Go 原始类型和切片类型：
+
+```go
+// 输出 int — 评分场景
+scoreAgent := agent.New[agent.NoDeps, int](chatModel,
+    agent.WithSystemPrompt[agent.NoDeps, int]("Rate the text quality from 1-10, return only the number."),
+)
+result, _ := scoreAgent.Run(ctx, "This is a great article about Go.", agent.NoDeps{})
+fmt.Println(result.Output) // 8
+
+// 输出 bool — 判断场景
+checkAgent := agent.New[agent.NoDeps, bool](chatModel,
+    agent.WithSystemPrompt[agent.NoDeps, bool]("Determine if the text contains harmful content."),
+)
+result, _ := checkAgent.Run(ctx, "Hello world!", agent.NoDeps{})
+fmt.Println(result.Output) // false
+
+// 输出 []string — 提取场景
+tagsAgent := agent.New[agent.NoDeps, []string](chatModel,
+    agent.WithSystemPrompt[agent.NoDeps, []string]("Extract key topics as a list of tags."),
+)
+result, _ := tagsAgent.Run(ctx, "Go 1.22 introduced range over integers...", agent.NoDeps{})
+fmt.Println(result.Output) // [go generics range]
+```
+
+**实现要点：** `output.SchemaFor[T]()` 需要通过反射检测 `T` 的 Kind，对非 struct 类型生成对应的 JSON Schema：
+
+| Go 类型 | JSON Schema type | 备注 |
+|---------|-----------------|------|
+| `int` / `int64` | `{"type": "integer"}` | |
+| `float64` | `{"type": "number"}` | |
+| `bool` | `{"type": "boolean"}` | |
+| `string` | 直接取文本，不走 output tool | 已有逻辑 |
+| `[]T` | `{"type": "array", "items": {...}}` | 递归处理 |
+
+当 `O` 是原始类型时，生成的 `final_result` tool 参数为 `{"result": <schema>}`，框架解析时取 `result` 字段。
+
+### 5.13 Conversation — 多轮对话便捷封装
+
+`Conversation` 是一个轻量级的内存对象，自动管理多轮对话的消息历史传递。不做持久化，不存数据库——只是省掉用户每次手动传 `message_history` 的样板代码。
+
+```go
+package agent
+
+// Conversation 封装多轮对话状态（纯内存）
+type Conversation[D, O any] struct {
+    agent    *Agent[D, O]
+    messages []*schema.Message   // 累积的消息历史
+}
+
+// NewConversation 创建对话实例
+func NewConversation[D, O any](a *Agent[D, O]) *Conversation[D, O]
+
+// Send 发送消息并自动携带历史
+func (c *Conversation[D, O]) Send(ctx context.Context, prompt string, deps D, opts ...RunOption) (*Result[O], error) {
+    result, err := c.agent.Run(ctx, prompt, deps,
+        append(opts, WithHistory(c.messages))...,
+    )
+    if err != nil {
+        return nil, err
+    }
+    c.messages = result.AllMessages()   // 更新历史
+    return result, nil
+}
+
+// SendStream 流式版本
+func (c *Conversation[D, O]) SendStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult[O], error)
+
+// Messages 获取当前完整的消息历史
+func (c *Conversation[D, O]) Messages() []*schema.Message
+
+// Reset 清空历史，开始新对话
+func (c *Conversation[D, O]) Reset()
+```
+
+**使用示例：**
+
+```go
+conv := agent.NewConversation(myAgent)
+
+// 多轮对话，无需手动管理 history
+r1, _ := conv.Send(ctx, "我叫张三", deps)
+r2, _ := conv.Send(ctx, "我刚才说我叫什么？", deps)   // 自动带上 r1 的历史
+r3, _ := conv.Send(ctx, "帮我总结一下我们的对话", deps) // 自动带上 r1+r2 的历史
+
+// 清空，开启新对话
+conv.Reset()
+r4, _ := conv.Send(ctx, "你好", deps)  // 全新对话，无历史
+
+// 需要持久化？自己拿出去存
+history := conv.Messages()
+data, _ := json.Marshal(history)
+// 存到 Redis/DB/文件...随你
+```
+
+**注意：** `Conversation` 不是并发安全的（多轮对话本身就是顺序的）。如果需要并发的多用户对话，每个用户创建独立的 `Conversation` 实例。
+
 ---
 
 ## 六、Agent 运行循环（核心流程）
@@ -738,7 +1012,7 @@ myAgent := agent.New[agent.NoDeps, string](
 
 | 模块 | 交付物 | 依赖 Eino |
 |------|--------|----------|
-| `output/schema.go` | struct → JSON Schema 自动生成 | 无 |
+| `output/schema.go` | struct / 原始类型 / 切片 → JSON Schema 自动生成 | 无 |
 | `output/tool_output.go` | "final_result" output tool 生成 | `components/tool` |
 | `output/validator.go` | OutputValidator + ParseOutput | 无 |
 | `agent/context.go` | `RunContext[D]` + context.Value 注入 | 无 |
@@ -746,27 +1020,33 @@ myAgent := agent.New[agent.NoDeps, string](
 | `agent/agent.go` | `Agent[D,O]` 核心 + `Run()` + Agent Loop | `components/model.ChatModel`、`schema.Message` |
 | `agent/options.go` | Option 模式 + `WithToolFunc` | `components/tool/utils.InferTool` |
 | `agent/result.go` | `Result[O]` | `schema.Message` |
+| `direct/direct.go` | `RequestText` / `Request[T]` 直接模型请求 | `components/model.ChatModel` |
 | `testutil/` | TestModel + FunctionModel | `components/model.ChatModel` |
 
 **验收标准：**
 - 能用 Eino OpenAI ChatModel 创建 Agent，注册 tool，运行完整 loop，得到类型化输出
-- "final_result" tool 模式正常工作
+- "final_result" tool 模式正常工作（struct / int / bool / []string 等类型）
 - OutputValidator + ErrModelRetry 重试正常
+- `direct.RequestText` / `direct.Request[T]` 可用
 - TestModel 可用于单元测试，不调用真实 API
 
-### Phase 2：流式 + Native Output + 多轮对话
+### Phase 2：流式 + Native Output + 多轮对话 + Union 输出
 
 | 模块 | 交付物 | 依赖 Eino |
 |------|--------|----------|
 | `agent/` | `RunStream()` + `StreamResult[O]` | `ChatModel.Stream()` |
 | `output/native_output.go` | Native 模式（模型原生 structured output） | 模型 option |
 | `agent/` | `RunWithHistory()` 多轮对话 | `schema.Message` |
+| `agent/conversation.go` | `Conversation[D,O]` 多轮对话便捷封装 | `schema.Message` |
+| `agent/union.go` | `OneOf2[A,B]` / `OneOf3[A,B,C]` Union 输出类型 | `components/tool` |
 | `agent/` | UsageLimits 实现 | `schema.TokenUsage` |
 
 **验收标准：**
 - 流式输出逐 token 返回
 - Native structured output 模式可用
 - 多轮对话正常工作
+- Conversation 可自动管理消息历史
+- Union 输出类型（OneOf2/OneOf3）正确生成多个 output tool，Match 编译期安全
 
 ### Phase 3：高级 Tool 特性
 
@@ -774,11 +1054,13 @@ myAgent := agent.New[agent.NoDeps, string](
 |------|--------|----------|
 | `agent/` | Deferred Tool（映射 Eino interrupt/resume） | `adk` interrupt |
 | `agent/` | Dynamic Toolset（根据上下文暴露不同工具） | 无 |
+| `agent/` | Tool `prepare` 回调（`PrepareFunc[D]` 动态裁剪参数 schema） | 无 |
 | `agent/` | 多模态输入支持 | `schema.Message` multimodal |
 
 **验收标准：**
 - Deferred Tool 可暂停等待外部确认
 - 动态 toolset 可根据依赖决定暴露哪些工具
+- Tool prepare 可按运行时上下文动态修改参数 schema
 
 ### Phase 4：可观测性 + Eval 基础
 
@@ -877,16 +1159,21 @@ for chunk := range stream.Recv() {
 | Run / RunSync | ✅ | ✅ `Run()`，基于 Eino `ChatModel.Generate` | P1 |
 | RunStream | ✅ | ✅ `RunStream()`，基于 Eino `ChatModel.Stream` | P2 |
 | 结构化输出（struct） | ✅ | ✅ "final_result" tool 模式 | P1 |
+| 结构化输出（原始类型） | ✅ | ✅ int/bool/float64/[]T 等 schema 自动生成 | P1 |
+| 结构化输出（Union） | ✅ | ✅ `OneOf2[A,B]` / `OneOf3[A,B,C]` 多 output tool | P2 |
 | 结构化输出（Native） | ✅ | ✅ 模型原生 JSON mode | P2 |
 | 结构化输出（Prompted） | ✅ | ⚠️ 按需 | P3 |
 | Output Validator | ✅ | ✅ `ValidatorFunc[O]` | P1 |
 | 流式 partial 输出 | ✅ | ✅ 基于 Eino StreamReader | P2 |
 | 依赖注入 RunContext | ✅ | ✅ `RunContext[D]` + context.Value | P1 |
 | Tool 自动 Schema | ✅ | ✅ **复用 Eino `InferTool`** | P1 |
+| Tool prepare 回调 | ✅ | ✅ `PrepareFunc[D]` 动态裁剪参数 schema | P3 |
 | Toolset | ✅ | ✅ 动态 tool 列表 | P3 |
 | Deferred Tool | ✅ | ✅ 映射 Eino ADK interrupt/resume | P3 |
 | ModelRetry | ✅ | ✅ `ErrModelRetry` | P1 |
 | 消息历史 / 多轮对话 | ✅ | ✅ `[]*schema.Message` 传入 | P2 |
+| Conversation 对象 | ✅ | ✅ `Conversation[D,O]` 自动管理消息历史 | P2 |
+| Direct Model Requests | ✅ | ✅ `direct.Request[T]` / `direct.RequestText` | P1 |
 | 多 Agent 委托 | ✅ | ✅ Tool 内调用子 Agent | P1 |
 | MCP Client | ✅ | ✅ **直接用 eino-ext MCP** | P1 |
 | MCP Server | ✅ | ✅ **直接用 eino-ext MCP** | P1 |
@@ -900,11 +1187,12 @@ for chunk := range stream.Recv() {
 | 模型字符串解析 | ✅ | ✅ 封装 eino-ext Provider 创建 | P2 |
 | Fallback Model | ✅ | ⚠️ 简单封装 | P2 |
 | Eval 框架 | ✅ | ✅ 新建 `eval/` 包 | P4-P5 |
+| Built-in Tools | ✅ | ❌ 不做，用户通过 Tool/MCP 自行接入 | - |
 | 持久化执行 | ✅ | ❌ 不在范围 | - |
 | UI 集成 | ✅ | ❌ 不在范围 | - |
 | A2A 协议 | ✅ | ❌ 不在范围 | - |
 
-**统计：约 40% 直接复用 Eino，约 40% 新建（核心差异化），约 20% 不在范围。**
+**统计：约 35% 直接复用 Eino，约 45% 新建（核心差异化），约 20% 不在范围。**
 
 ---
 
@@ -915,7 +1203,7 @@ for chunk := range stream.Recv() {
 **"站在 Eino 肩膀上，做 Pydantic AI 体验层"**
 
 - **Eino 提供**：模型抽象、Provider 实现、Tool 基础设施、流式处理、编排引擎、MCP、可观测回调
-- **我们聚焦**：泛型 Agent[D,O]、结构化输出 + 自动验证、依赖注入 RunContext、TestModel、Eval 框架
+- **我们聚焦**：泛型 Agent[D,O]、结构化输出（struct/原始类型/Union）+ 自动验证、依赖注入 RunContext、Conversation、Direct Request、TestModel、Eval 框架
 
 ### 核心卖点
 
@@ -930,8 +1218,8 @@ for chunk := range stream.Recv() {
 
 | Phase | 核心工作量 | 预估 |
 |-------|-----------|------|
-| P1 MVP | Agent[D,O] + 结构化输出 + TestModel | 2-3 周 |
-| P2 | 流式 + Native Output + 多轮 | 1-2 周 |
-| P3 | Deferred Tool + 多模态 | 1-2 周 |
+| P1 MVP | Agent[D,O] + 结构化输出（含原始类型）+ Direct Request + TestModel | 2-3 周 |
+| P2 | 流式 + Native Output + 多轮 + Conversation + Union 输出 | 2-3 周 |
+| P3 | Deferred Tool + Tool prepare + 多模态 | 1-2 周 |
 | P4 | Eval 基础 + Callback | 2-3 周 |
 | P5 | Eval 高级 | 2-3 周 |
