@@ -42,8 +42,8 @@ func GenerateOutputTool[T any](paramsOneOf *schema.ParamsOneOf) tool.InvokableTo
 func GenerateOutputToolWithName[T any](name string, paramsOneOf *schema.ParamsOneOf) tool.InvokableTool {
 	return &outputTool{
 		info: &schema.ToolInfo{
-			Name:       name,
-			Desc:       OutputToolDescription,
+			Name:        name,
+			Desc:        OutputToolDescription,
 			ParamsOneOf: paramsOneOf,
 		},
 	}

@@ -70,6 +70,17 @@ func (c *Conversation[D, O]) Messages() []*schema.Message {
 	return c.messages
 }
 
+// Len returns the number of messages in the conversation history.
+func (c *Conversation[D, O]) Len() int {
+	return len(c.messages)
+}
+
+// SetMessages replaces the conversation history with the provided messages.
+// This is useful for restoring a previously saved conversation state.
+func (c *Conversation[D, O]) SetMessages(msgs []*schema.Message) {
+	c.messages = msgs
+}
+
 // Reset clears the conversation history.
 func (c *Conversation[D, O]) Reset() {
 	c.messages = nil

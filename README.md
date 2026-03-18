@@ -254,8 +254,10 @@ conv := agent.NewConversation(a)
 r1, _ := conv.Send(ctx, "My name is Alice.", deps)
 r2, _ := conv.Send(ctx, "What's my name?", deps)  // history carried forward
 
-conv.Messages() // full history
-conv.Reset()    // clear history
+conv.Messages()      // full history
+conv.Len()           // number of messages
+conv.SetMessages(saved) // restore a saved conversation state
+conv.Reset()         // clear history
 ```
 
 ### Streaming (Experimental)

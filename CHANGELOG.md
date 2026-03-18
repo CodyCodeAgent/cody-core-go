@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests for `WithTool`, `RunWithHistory`, `WithMaxIterations`, assertion helpers
 - Advanced examples: union-types, validator, conversation
 - CI checks: `go mod tidy` verification, `go build ./examples/...`
+- `Conversation.Len()` returns the number of messages in the history
+- `Conversation.SetMessages()` restores a previously saved conversation state
 
 ### Fixed
 - `StreamResult.done` channel was created twice (in `RunStream` and `TextStream`), causing a dead channel

@@ -438,8 +438,8 @@ func TestAgent_Run_WithHistory(t *testing.T) {
 	assert.Equal(t, "What's my name?", call.Messages[3].Content)
 
 	// Check NewMessages vs AllMessages
-	assert.Equal(t, 4, len(result.AllMessages()))  // history(2) + user(1) + assistant(1)
-	assert.Equal(t, 2, len(result.NewMessages()))   // user(1) + assistant(1)
+	assert.Equal(t, 4, len(result.AllMessages())) // history(2) + user(1) + assistant(1)
+	assert.Equal(t, 2, len(result.NewMessages())) // user(1) + assistant(1)
 }
 
 // -- Tests: Usage limits --
