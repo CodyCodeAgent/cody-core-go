@@ -1,4 +1,4 @@
-module github.com/codycode/cody-core-go
+module github.com/CodyCodeAgent/cody-core-go
 
 go 1.24.7
 

@@ -5,7 +5,7 @@ package deps
 import (
 	"context"
 
-	"github.com/codycode/cody-core-go/agent"
+	"github.com/CodyCodeAgent/cody-core-go/agent"
 )
 
 // GetDeps extracts typed dependencies from a context.Context.

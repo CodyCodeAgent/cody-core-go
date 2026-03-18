@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/codycode/cody-core-go/testutil"
+	"github.com/CodyCodeAgent/cody-core-go/testutil"
 )
 
 // -- Fix verification: Plain text JSON parse fallback (behavior.md §3.5) --

@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Clone the repository
-git clone https://github.com/codycode/cody-core-go.git
+git clone https://github.com/CodyCodeAgent/cody-core-go.git
 cd cody-core-go
 
 # Verify everything works

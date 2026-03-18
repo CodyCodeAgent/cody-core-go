@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/codycode/cody-core-go/agent"
-	"github.com/codycode/cody-core-go/testutil"
+	"github.com/CodyCodeAgent/cody-core-go/agent"
+	"github.com/CodyCodeAgent/cody-core-go/testutil"
 )
 
 type Sentiment struct {

@@ -9,7 +9,7 @@ A Pydantic AI-style agent framework for Go, built on [cloudwego/eino](https://gi
 ## Install
 
 ```bash
-go get github.com/codycode/cody-core-go
+go get github.com/CodyCodeAgent/cody-core-go
 ```
 
 Requires Go 1.24+.
@@ -24,7 +24,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/codycode/cody-core-go/agent"
+    "github.com/CodyCodeAgent/cody-core-go/agent"
     einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 )
 
@@ -165,7 +165,7 @@ agent.WithToolFunc[MyDeps, string, SearchArgs](
 Dependencies flow through `RunContext[D]` via `context.Value`. Tools created with `WithToolFunc` receive `*RunContext[D]` directly. For standalone Eino tools, use the `deps` package:
 
 ```go
-import "github.com/codycode/cody-core-go/deps"
+import "github.com/CodyCodeAgent/cody-core-go/deps"
 
 func myEinoTool(ctx context.Context, args string) (string, error) {
     d, ok := deps.GetDeps[MyDeps](ctx)
@@ -286,7 +286,7 @@ result, _ := sr.Final() // conversation history is automatically updated
 For simple one-shot calls without the agent loop, tools, or retries:
 
 ```go
-import "github.com/codycode/cody-core-go/direct"
+import "github.com/CodyCodeAgent/cody-core-go/direct"
 
 // Plain text
 text, _ := direct.RequestText(ctx, chatModel, "Translate: hello",

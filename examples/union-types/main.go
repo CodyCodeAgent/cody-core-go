@@ -11,8 +11,8 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/codycode/cody-core-go/agent"
-	"github.com/codycode/cody-core-go/testutil"
+	"github.com/CodyCodeAgent/cody-core-go/agent"
+	"github.com/CodyCodeAgent/cody-core-go/testutil"
 )
 
 // VulnReport is returned when a vulnerability is found.

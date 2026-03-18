@@ -9,8 +9,8 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/codycode/cody-core-go/agent"
-	"github.com/codycode/cody-core-go/output"
+	"github.com/CodyCodeAgent/cody-core-go/agent"
+	"github.com/CodyCodeAgent/cody-core-go/output"
 )
 
 // RequestOption configures a direct model request.

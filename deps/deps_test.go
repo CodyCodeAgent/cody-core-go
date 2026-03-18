@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/codycode/cody-core-go/agent"
+	"github.com/CodyCodeAgent/cody-core-go/agent"
 	"github.com/stretchr/testify/assert"
 )
 
