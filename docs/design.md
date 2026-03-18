@@ -99,7 +99,7 @@
 
 | Eino 概念 | Pydantic AI 对应 | 关系 |
 |-----------|-----------------|------|
-| `components/model.ChatModel` | Model 接口 | **直接使用**，不再封装 |
+| `components/model.BaseChatModel` | Model 接口 | **直接使用**，不再封装 |
 | `schema.Message` / `schema.SystemMessage` / `schema.UserMessage` | Message 类型体系 | **直接使用** |
 | `components/tool.InferableTool` + `utils.InferTool()` | `@agent.tool` 装饰器注册 | **直接使用**，Eino 已能从函数签名推断 schema |
 | `adk.ChatModelAgent` | Agent.run()（ReAct loop） | **封装增强**，加结构化输出 + 验证 |
@@ -147,8 +147,7 @@ cody-core-go/
 │   ├── output.go                       # OutputMode (Tool/Native/Prompted)
 │   ├── schema.go                       # struct → JSON Schema 自动生成（支持 struct/原始类型/切片）
 │   ├── validator.go                    # OutputValidator + 验证重试
-│   ├── tool_output.go                  # Tool 模式实现（生成 output tool）
-│   └── native_output.go               # Native 模式实现（模型原生 structured output）
+│   └── tool_output.go                  # Tool 模式实现（生成 output tool）
 │
 ├── direct/                             # 直接模型请求（绕过 Agent）
 │   └── direct.go                       # RequestText / Request[T] 轻量封装
@@ -157,16 +156,16 @@ cody-core-go/
 │   └── deps.go                         # RunContext 工具函数、依赖提取
 │
 ├── testutil/                           # 核心：测试工具
-│   ├── testmodel.go                    # TestModel（实现 Eino ChatModel 接口）
+│   ├── testmodel.go                    # TestModel（实现 Eino BaseChatModel 接口）
 │   ├── funcmodel.go                    # FunctionModel
 │   └── assertions.go                   # Agent 测试断言辅助
 │
-├── eval/                               # 评估框架（Phase 5）
+├── eval/                               # 评估框架（Phase 5，尚未实现）
 │   ├── dataset.go                      # Dataset / Case 定义
 │   ├── evaluator.go                    # Evaluator 接口 + 内置实现
 │   └── report.go                       # Report 输出
 │
-└── examples/                           # 示例代码
+└── examples/                           # 示例代码（尚未实现）
     ├── basic/                          # 基础 Agent 用法
     ├── structured_output/              # 结构化输出
     ├── multi_agent/                    # 多 Agent 委托
@@ -189,31 +188,36 @@ import (
     "context"
 
     "github.com/cloudwego/eino/components/model"
-    einotool "github.com/cloudwego/eino/components/tool"
+    "github.com/cloudwego/eino/components/tool"
     "github.com/cloudwego/eino/schema"
+
+    "github.com/codycode/cody-core-go/output"
 )
 
 // Agent 是框架的核心抽象
 // D = 依赖类型（通过 RunContext 传递给 tool 和 system prompt）
 // O = 输出类型（自动结构化验证）
 type Agent[D any, O any] struct {
-    chatModel       model.ChatModel          // Eino ChatModel（由 eino-ext 提供实现）
-    systemPrompts   []SystemPromptFunc[D]     // 动态 system prompt
-    staticPrompts   []string                  // 静态 system prompt
-    tools           []einotool.BaseTool       // Eino Tool 实例
-    outputConfig    output.Config[O]          // 结构化输出配置
-    maxRetries      int                       // 最大重试次数
-    modelSettings   map[string]any            // 模型参数覆盖
+    chatModel        model.BaseChatModel       // Eino BaseChatModel（由 eino-ext 提供实现）
+    systemPrompts    []SystemPromptFunc[D]      // 动态 system prompt
+    staticPrompts    []string                   // 静态 system prompt
+    tools            []toolEntry[D]             // 用户工具列表（含可选 prepare 回调）
+    outputMode       output.Mode                // 结构化输出模式
+    outputValidators []output.ValidatorFunc[O]  // 输出验证器链
+    maxToolRetries   int                        // 每个工具的最大重试次数（默认 1）
+    maxResultRetries int                        // 输出验证的最大重试次数（默认 1）
+    maxIterations    int                        // Agent Loop 最大迭代次数（默认 20）
+    modelSettings    map[string]any             // 模型参数覆盖
+    initErrors       []error                    // 构建时收集的错误（延迟到 Run 时返回）
+    outputTools      []outputToolEntry          // Union 类型的多个 output tool
+    outputParser     func(toolName string, argsJSON []byte) (O, error) // Union 类型的自定义解析器
 }
 
 // SystemPromptFunc 动态 system prompt 生成函数
 type SystemPromptFunc[D any] func(ctx *RunContext[D]) (string, error)
 
-// 创建 Agent — 接受 Eino ChatModel 实例
-func New[D any, O any](chatModel model.ChatModel, opts ...Option[D, O]) *Agent[D, O]
-
-// 便捷创建 — 通过模型字符串（如 "openai:gpt-4o"），内部调用 eino-ext 创建
-func NewFromString[D any, O any](modelStr string, opts ...Option[D, O]) (*Agent[D, O], error)
+// 创建 Agent — 接受 Eino BaseChatModel 实例
+func New[D any, O any](chatModel model.BaseChatModel, opts ...Option[D, O]) *Agent[D, O]
 
 // 同步运行（Go 天然同步，不需要 run_sync）
 func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...RunOption) (*Result[O], error)
@@ -221,7 +225,7 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 // 流式运行
 func (a *Agent[D, O]) RunStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult[O], error)
 
-// 传入消息历史（多轮对话）
+// 传入消息历史（多轮对话）——便捷方法，等价于 Run + WithHistory RunOption
 func (a *Agent[D, O]) RunWithHistory(
     ctx context.Context,
     prompt string,
@@ -230,8 +234,8 @@ func (a *Agent[D, O]) RunWithHistory(
     opts ...RunOption,
 ) (*Result[O], error)
 
-// 替换模型（用于测试）
-func (a *Agent[D, O]) WithModel(m model.ChatModel) *Agent[D, O]
+// 替换模型（用于测试）——返回浅拷贝
+func (a *Agent[D, O]) WithModel(m model.BaseChatModel) *Agent[D, O]
 ```
 
 ### 5.2 RunContext[D] — 依赖注入
@@ -267,25 +271,31 @@ import "github.com/cloudwego/eino/schema"
 
 // Result 包含 agent 运行结果
 type Result[O any] struct {
-    Output   O                   // 类型化的结构化输出
-    Messages []*schema.Message   // 完整消息历史（Eino 原生类型）
-    Usage    Usage               // token 用量统计
+    Output          O              // 类型化的结构化输出
+    Usage           Usage          // token 用量统计
+    allMessages     []*schema.Message   // 所有消息（不含 system，私有字段）
+    newMessageStart int                 // 新消息的起始索引
 }
+
+// NewMessages 返回本次 run 产生的新消息（不含 history 和 system）
+func (r *Result[O]) NewMessages() []*schema.Message
+
+// AllMessages 返回完整消息序列（含 history，不含 system）
+func (r *Result[O]) AllMessages() []*schema.Message
 
 // StreamResult 提供流式访问
 type StreamResult[O any] struct {
-    stream *schema.StreamReader[*schema.Message]  // Eino 的流式 reader
-    // ...
+    // 内部字段...
 }
 
 // 文本流
 func (s *StreamResult[O]) TextStream() <-chan string
 
-// 结构化输出流（partial 解析）
-func (s *StreamResult[O]) OutputStream() <-chan O
-
-// 获取最终结果
+// 获取最终结果（等待流式完成）
 func (s *StreamResult[O]) Final() (*Result[O], error)
+
+// 释放资源
+func (s *StreamResult[O]) Close()
 ```
 
 ### 5.4 Option 模式
@@ -296,19 +306,22 @@ package agent
 // Agent 构建选项
 func WithSystemPrompt[D, O any](prompt string) Option[D, O]
 func WithDynamicSystemPrompt[D, O any](fn SystemPromptFunc[D]) Option[D, O]
-func WithTool[D, O any](t einotool.BaseTool) Option[D, O]              // 直接传 Eino Tool
+func WithTool[D, O any](t tool.InvokableTool) Option[D, O]             // 直接传 Eino Tool
 func WithToolFunc[D, O any, Args any](                                   // 便捷：从函数创建
     name, desc string,
     fn func(ctx *RunContext[D], args Args) (string, error),
+    opts ...ToolOption[D],                                               // 可选 prepare 回调
 ) Option[D, O]
 func WithOutputMode[D, O any](mode output.Mode) Option[D, O]
 func WithOutputValidator[D, O any](fn output.ValidatorFunc[O]) Option[D, O]
-func WithMaxRetries[D, O any](n int) Option[D, O]
+func WithMaxRetries[D, O any](n int) Option[D, O]                       // per-tool 重试上限
+func WithMaxResultRetries[D, O any](n int) Option[D, O]                 // 输出验证重试上限
 func WithModelSettings[D, O any](settings map[string]any) Option[D, O]
-func WithMCPServer[D, O any](server mcp.Server) Option[D, O]            // 传入 Eino MCP Server
 
 // 运行时选项
+func WithHistory(history []*schema.Message) RunOption
 func WithUsageLimits(limits UsageLimits) RunOption
+func WithRunModelSettings(settings map[string]any) RunOption
 func WithRunMetadata(meta map[string]any) RunOption
 ```
 
@@ -326,27 +339,37 @@ const (
     ModePrompted             // 通过 prompt 约束输出格式
 )
 
-// Config 输出配置
-type Config[O any] struct {
-    Mode       Mode
-    Schema     *JSONSchema            // 从 O 自动生成
-    Validators []ValidatorFunc[O]
-}
-
 // ValidatorFunc 输出验证函数
 type ValidatorFunc[O any] func(ctx context.Context, output O) (O, error)
 
-// SchemaFor 从 Go struct 自动生成 JSON Schema
-// 支持 struct tag: json, description, required, default, enum, minimum, maximum
-func SchemaFor[T any]() (*JSONSchema, error)
+// RunValidators 依次执行验证器链
+func RunValidators[O any](ctx context.Context, output O, validators []ValidatorFunc[O]) (O, error)
 
-// GenerateOutputTool 生成用于结构化输出的 Eino Tool
+// IsPrimitive 判断 T 是否为非 struct 类型（int、bool、float64、切片等），需要包装为 {"result": ...}
+func IsPrimitive[T any]() bool
+
+// IsString 判断 T 是否为 string 类型
+func IsString[T any]() bool
+
+// BuildParamsOneOf 从 Go 类型自动生成 Eino ParamsOneOf
+// 支持 struct tag: json, description, jsonschema, required, enum
+// struct 类型直接生成 schema；原始类型/切片类型包装为 {"result": <schema>}
+func BuildParamsOneOf[T any]() (*schema.ParamsOneOf, error)
+
+// GenerateOutputTool 生成用于结构化输出的 Eino InvokableTool
 // 当 Mode=ModeTool 时，框架自动注册一个名为 "final_result" 的 tool
 // LLM 通过调用此 tool 返回结构化数据
-func GenerateOutputTool[O any](schema *JSONSchema) einotool.BaseTool
+func GenerateOutputTool[T any](paramsOneOf *schema.ParamsOneOf) tool.InvokableTool
 
-// ParseOutput 从 JSON 反序列化并验证输出
-func ParseOutput[O any](data []byte, validators []ValidatorFunc[O], ctx context.Context) (O, error)
+// GenerateOutputToolWithName 生成自定义名称的 output tool（用于 Union 类型）
+func GenerateOutputToolWithName[T any](name string, paramsOneOf *schema.ParamsOneOf) tool.InvokableTool
+
+// IsOutputToolName 检查 tool name 是否为 output tool
+func IsOutputToolName(name string) bool
+
+// ParseStructuredOutput 从 JSON 反序列化输出
+// 自动处理 Markdown fence 剥离、原始类型的 {"result": ...} 解包
+func ParseStructuredOutput[T any](data []byte) (T, error)
 ```
 
 ### 5.6 工具系统 — 适配 Eino
@@ -355,8 +378,8 @@ func ParseOutput[O any](data []byte, validators []ValidatorFunc[O], ctx context.
 package agent
 
 import (
-    einotool "github.com/cloudwego/eino/components/tool"
-    "github.com/cloudwego/eino/components/tool/utils"
+    "github.com/cloudwego/eino/components/tool"
+    "github.com/codycode/cody-core-go/output"
 )
 
 // WithToolFunc 便捷创建带依赖注入的工具
@@ -364,15 +387,17 @@ import (
 func WithToolFunc[D, O any, Args any](
     name, desc string,
     fn func(ctx *RunContext[D], args Args) (string, error),
+    opts ...ToolOption[D],
 ) Option[D, O] {
     // 内部实现：
-    // 1. 利用 Eino 的 utils.InferTool 从 Args struct 自动生成 JSON Schema
-    // 2. 包装 fn，从 context.Context 中提取 RunContext[D]
-    // 3. 返回标准 Eino Tool
+    // 1. 调用 output.BuildParamsOneOf[Args]() 从 Args struct 自动生成参数 schema
+    // 2. 构建 wrappedTool（实现 tool.InvokableTool），包装 fn：
+    //    从 context.Context 中提取 RunContext[D]，json.Unmarshal 参数
+    // 3. 附加可选的 prepare 回调
 }
 
 // 用户也可以直接传入 Eino 原生 Tool（无需依赖注入的场景）
-func WithTool[D, O any](t einotool.BaseTool) Option[D, O]
+func WithTool[D, O any](t tool.InvokableTool) Option[D, O]
 
 // 直接使用 Eino 的 InferTool（无依赖注入，最简单的方式）
 // searchTool, _ := utils.InferTool("search", "Search the web", mySearchFunc)
@@ -416,7 +441,7 @@ import (
     "github.com/cloudwego/eino/schema"
 )
 
-// TestModel 实现 Eino 的 model.ChatModel 接口
+// TestModel 实现 Eino 的 model.BaseChatModel 接口
 // 用于单元测试，不调用真实 API
 type TestModel struct {
     responses []TestResponse    // 预设的响应序列
@@ -425,7 +450,9 @@ type TestModel struct {
 
 type TestResponse struct {
     Text      string                   // 文本响应
-    ToolCalls []*schema.ToolCall       // tool call 响应
+    ToolCalls []schema.ToolCall        // tool call 响应（注意：值类型，非指针）
+    Usage     *schema.TokenUsage       // 可选 token 用量
+    Err       error                    // 如设置，Generate 返回此错误
 }
 
 type TestCall struct {
@@ -435,14 +462,15 @@ type TestCall struct {
 
 func NewTestModel(responses ...TestResponse) *TestModel
 
-// 实现 Eino ChatModel 接口
+// 实现 Eino BaseChatModel 接口
 func (m *TestModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error)
 func (m *TestModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error)
 
-// 断言辅助
+// 内省辅助
 func (m *TestModel) CallCount() int
 func (m *TestModel) LastCall() TestCall
 func (m *TestModel) AllCalls() []TestCall
+func (m *TestModel) Reset()  // 清空调用记录并重置响应索引
 
 // FunctionModel 用自定义函数模拟模型行为
 type FunctionModel struct {
@@ -466,11 +494,11 @@ import (
 )
 
 // RequestText 最简调用，返回纯文本
-func RequestText(ctx context.Context, chatModel model.ChatModel, prompt string, opts ...RequestOption) (string, error)
+func RequestText(ctx context.Context, chatModel model.BaseChatModel, prompt string, opts ...RequestOption) (string, error)
 
 // Request 带结构化输出的直接调用
 // 内部：构建 messages + output tool → chatModel.Generate → 反序列化为 T
-func Request[T any](ctx context.Context, chatModel model.ChatModel, prompt string, opts ...RequestOption) (T, error)
+func Request[T any](ctx context.Context, chatModel model.BaseChatModel, prompt string, opts ...RequestOption) (T, error)
 
 // RequestOption 可选参数
 func WithSystemPrompt(prompt string) RequestOption
@@ -503,8 +531,8 @@ fmt.Println(result.Label, result.Score) // positive 0.95
 ```go
 package agent
 
-// PrepareFunc 在每次 tool 调用前执行，可动态修改 tool 的 JSON Schema
-type PrepareFunc[D any] func(ctx *RunContext[D], schema *output.JSONSchema) (*output.JSONSchema, error)
+// PrepareFunc 在每次模型调用前执行，可动态修改 tool 的 ToolInfo（含参数 schema）
+type PrepareFunc[D any] func(ctx *RunContext[D], toolInfo *schema.ToolInfo) (*schema.ToolInfo, error)
 
 // WithToolFunc 增加 prepare 选项
 func WithToolFunc[D, O any, Args any](
@@ -532,17 +560,18 @@ myAgent := agent.New[MyDeps, string](chatModel,
             // ... 执行搜索
             return results, nil
         },
-        agent.WithPrepare[MyDeps](func(ctx *agent.RunContext[MyDeps], schema *output.JSONSchema) (*output.JSONSchema, error) {
+        agent.WithPrepare[MyDeps](func(ctx *agent.RunContext[MyDeps], toolInfo *schema.ToolInfo) (*schema.ToolInfo, error) {
             if !ctx.Deps.IsAdmin {
-                delete(schema.Properties, "admin_filter")  // 非管理员看不到这个参数
+                // 非管理员看不到这个参数（修改 ToolInfo 的 ParamsOneOf）
+                // 具体实现视 ParamsOneOf 的底层结构而定
             }
-            return schema, nil
+            return toolInfo, nil
         }),
     ),
 )
 ```
 
-**实现要点：** 在 Agent Loop 的步骤 5（调用 chatModel.Generate）之前，遍历所有带 prepare 回调的 tool，动态生成本轮的 tool schema 列表。
+**实现要点：** Agent Loop 每次迭代的 `buildToolInfos` 方法中，遍历所有带 prepare 回调的 tool，调用 prepare 获取修改后的 `*schema.ToolInfo`，再传入 `model.WithTools()` Option。
 
 ### 5.11 Union 输出类型 — OneOf2/OneOf3
 
@@ -571,14 +600,6 @@ func (u OneOf2[A, B]) Match(onA func(A), onB func(B)) {
     }
 }
 
-// OutputTools 框架内部调用，生成多个 output tool
-func (u OneOf2[A, B]) OutputTools() []einotool.BaseTool {
-    return []einotool.BaseTool{
-        output.GenerateOutputTool[A]("final_result_" + typeName[A]()),
-        output.GenerateOutputTool[B]("final_result_" + typeName[B]()),
-    }
-}
-
 // OneOf3 三选一，以此类推
 type OneOf3[A, B, C any] struct { value any }
 ```
@@ -597,7 +618,8 @@ type Safe struct {
     CheckedItems []string `json:"checked_items" description:"已检查项目"`
 }
 
-reviewer := agent.New[MyDeps, agent.OneOf2[VulnFound, Safe]](chatModel,
+// 使用 NewOneOf2 创建 Union 输出的 Agent（内部自动生成多个 output tool + 自定义解析器）
+reviewer := agent.NewOneOf2[MyDeps, VulnFound, Safe](chatModel,
     agent.WithSystemPrompt[MyDeps, agent.OneOf2[VulnFound, Safe]](
         "你是安全审查专家，检查代码安全性",
     ),
@@ -649,7 +671,7 @@ result, _ := tagsAgent.Run(ctx, "Go 1.22 introduced range over integers...", age
 fmt.Println(result.Output) // [go generics range]
 ```
 
-**实现要点：** `output.SchemaFor[T]()` 需要通过反射检测 `T` 的 Kind，对非 struct 类型生成对应的 JSON Schema：
+**实现要点：** `output.BuildParamsOneOf[T]()` 通过反射检测 `T` 的 Kind，对非 struct 类型生成对应的 JSON Schema：
 
 | Go 类型 | JSON Schema type | 备注 |
 |---------|-----------------|------|
@@ -959,10 +981,10 @@ mainAgent := agent.New[MyDeps, MainResult](chatModel,
 
 ```go
 func TestOrderAgent(t *testing.T) {
-    // TestModel 实现了 Eino ChatModel 接口
+    // TestModel 实现了 Eino BaseChatModel 接口
     tm := testutil.NewTestModel(
         testutil.TestResponse{
-            ToolCalls: []*schema.ToolCall{{
+            ToolCalls: []schema.ToolCall{{
                 Function: schema.FunctionCall{
                     Name:      "get_order",
                     Arguments: `{"order_id":"ORD-1"}`,
@@ -970,7 +992,7 @@ func TestOrderAgent(t *testing.T) {
             }},
         },
         testutil.TestResponse{
-            ToolCalls: []*schema.ToolCall{{
+            ToolCalls: []schema.ToolCall{{
                 Function: schema.FunctionCall{
                     Name:      "final_result",
                     Arguments: `{"order_id":"ORD-1","total_amount":99.9,"status":"completed","summary":"test"}`,
@@ -1014,14 +1036,14 @@ myAgent := agent.New[agent.NoDeps, string](
 |------|--------|----------|
 | `output/schema.go` | struct / 原始类型 / 切片 → JSON Schema 自动生成 | 无 |
 | `output/tool_output.go` | "final_result" output tool 生成 | `components/tool` |
-| `output/validator.go` | OutputValidator + ParseOutput | 无 |
+| `output/validator.go` | OutputValidator + RunValidators | 无 |
 | `agent/context.go` | `RunContext[D]` + context.Value 注入 | 无 |
 | `agent/retry.go` | `ErrModelRetry` | 无 |
-| `agent/agent.go` | `Agent[D,O]` 核心 + `Run()` + Agent Loop | `components/model.ChatModel`、`schema.Message` |
+| `agent/agent.go` | `Agent[D,O]` 核心 + `Run()` + Agent Loop | `components/model.BaseChatModel`、`schema.Message` |
 | `agent/options.go` | Option 模式 + `WithToolFunc` | `components/tool/utils.InferTool` |
 | `agent/result.go` | `Result[O]` | `schema.Message` |
-| `direct/direct.go` | `RequestText` / `Request[T]` 直接模型请求 | `components/model.ChatModel` |
-| `testutil/` | TestModel + FunctionModel | `components/model.ChatModel` |
+| `direct/direct.go` | `RequestText` / `Request[T]` 直接模型请求 | `components/model.BaseChatModel` |
+| `testutil/` | TestModel + FunctionModel | `components/model.BaseChatModel` |
 
 **验收标准：**
 - 能用 Eino OpenAI ChatModel 创建 Agent，注册 tool，运行完整 loop，得到类型化输出
@@ -1068,7 +1090,7 @@ myAgent := agent.New[agent.NoDeps, string](
 |------|--------|----------|
 | `agent/` | Callback 集成（适配 Eino Callback Handler） | `callbacks` |
 | `eval/` | Dataset + Case + 基础 Evaluator（ExactMatch/Contains） | 无 |
-| `eval/` | LLMJudge Evaluator | `components/model.ChatModel` |
+| `eval/` | LLMJudge Evaluator | `components/model.BaseChatModel` |
 
 ### Phase 5（远期）：高级 Eval + Graph 增强
 
@@ -1119,14 +1141,17 @@ func GetDeps[D any](ctx context.Context) (D, bool) {
 
 ### 9.3 JSON Schema 生成
 
-复用 Eino 已有的 schema 推断能力（`utils.InferTool` 内部已有），同时扩展支持更多 struct tag：
+使用自定义的 `output.BuildParamsOneOf[T]()` 实现 schema 生成，支持以下 struct tag：
 
 ```go
 type MyOutput struct {
-    Name  string `json:"name" description:"用户名称" required:"true"`
-    Score int    `json:"score" description:"评分" minimum:"0" maximum:"100"`
-    Tags  []string `json:"tags" description:"标签列表"`
+    Name  string   `json:"name" description:"用户名称" required:"true"`
+    Score int      `json:"score" description:"评分"`
+    Tags  []string `json:"tags,omitempty" description:"标签列表"`
+    Status string  `json:"status" description:"状态" enum:"active,inactive"`
 }
+// 也支持 jsonschema tag：`jsonschema:"required,description=xxx,enum=a,enum=b"`
+// 注意：目前不支持 minimum/maximum tag
 ```
 
 ### 9.4 流式输出
@@ -1139,7 +1164,7 @@ stream, err := chatModel.Stream(ctx, messages, opts...)
 
 // 我们封装的层
 for chunk := range stream.Recv() {
-    // 解析 chunk → TextStream / OutputStream
+    // 解析 chunk → TextStream
 }
 ```
 
@@ -1178,7 +1203,7 @@ for chunk := range stream.Recv() {
 | MCP Client | ✅ | ✅ **直接用 eino-ext MCP** | P1 |
 | MCP Server | ✅ | ✅ **直接用 eino-ext MCP** | P1 |
 | OpenTelemetry | ✅ | ✅ **复用 Eino Callbacks** + 增强 | P4 |
-| TestModel | ✅ | ✅ 新建（实现 Eino ChatModel 接口） | P1 |
+| TestModel | ✅ | ✅ 新建（实现 Eino BaseChatModel 接口） | P1 |
 | FunctionModel | ✅ | ✅ 新建 | P1 |
 | 多模态输入 | ✅ | ✅ **复用 Eino schema.Message** multimodal | P3 |
 | Thinking 模式 | ✅ | ✅ **复用 Eino/eino-ext** Anthropic thinking | P2 |
@@ -1210,7 +1235,7 @@ for chunk := range stream.Recv() {
 1. **泛型类型安全** — `Agent[D, O]` 编译期保证输入输出类型正确
 2. **结构化输出 + 自动验证** — struct → JSON Schema → LLM → 反序列化 → 验证 → 自动重试，全自动
 3. **依赖注入** — `RunContext[D]` 让 tool 和 system prompt 可以安全访问运行时依赖
-4. **可测试** — TestModel 实现 Eino ChatModel 接口，零 API 调用单测
+4. **可测试** — TestModel 实现 Eino BaseChatModel 接口，零 API 调用单测
 5. **不造轮子** — 模型、工具、MCP、编排全部复用 Eino 成熟实现
 6. **可逃逸** — 用户随时可以降级到 Eino 原生 API，不被锁定
 

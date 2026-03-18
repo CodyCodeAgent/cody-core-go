@@ -300,7 +300,7 @@ func main() {
     ctx := context.Background()
     chatModel := createModel()
 
-    reviewer := agent.New[agent.NoDeps, agent.OneOf2[VulnFound, CodeSafe]](
+    reviewer := agent.NewOneOf2[agent.NoDeps, VulnFound, CodeSafe](
         chatModel,
         agent.WithSystemPrompt[agent.NoDeps, agent.OneOf2[VulnFound, CodeSafe]](
             "You are a security code reviewer. Analyze code for vulnerabilities.",
@@ -339,8 +339,8 @@ func main() {
 ```
 
 **期望行为：**
-- 注册两个 output tool：`final_result_vuln_found` 和 `final_result_code_safe`
-- 对于 SQL 注入代码，模型应选择 `final_result_vuln_found`
+- 注册两个 output tool：`final_result_VulnFound` 和 `final_result_CodeSafe`
+- 对于 SQL 注入代码，模型应选择 `final_result_VulnFound`
 - `result.Output.Value()` 返回 `VulnFound` 类型
 - `Match` 调用正确的分支
 

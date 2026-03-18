@@ -578,12 +578,12 @@ class ModelSettings(TypedDict, total=False):
 | `@agent.system_prompt` | `agent.WithDynamicSystemPrompt[D,O](fn)` | |
 | `message_history=` | `agent.WithHistory(msgs)` | RunOption |
 | `usage_limits=` | `agent.WithUsageLimits(limits)` | RunOption |
-| `model_settings=` | `agent.WithModelSettings(settings)` | RunOption |
+| `model_settings=` | `agent.WithRunModelSettings(settings)` | RunOption（覆盖 Agent 级设置） |
 | `output_type=int` | `Agent[D, int]` | 泛型参数 |
-| `output_type=A \| B` | `Agent[D, OneOf2[A,B]]` | |
-| `agent.override(model=)` | `agent.WithModel(m)` | 返回新 Agent |
-| `TestModel` | `testutil.TestModel` | 实现 Eino ChatModel |
-| `FunctionModel` | `testutil.FunctionModel` | 实现 Eino ChatModel |
+| `output_type=A \| B` | `agent.NewOneOf2[D, A, B](...)` | 使用 `NewOneOf2` 构造函数 |
+| `agent.override(model=)` | `agent.WithModel(m)` | 返回浅拷贝 |
+| `TestModel` | `testutil.TestModel` | 实现 Eino BaseChatModel |
+| `FunctionModel` | `testutil.FunctionModel` | 实现 Eino BaseChatModel |
 
 ---
 

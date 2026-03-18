@@ -26,14 +26,14 @@
 
 ## 二、output/schema 包测试
 
-### 2.1 SchemaFor[T] — struct 类型
+### 2.1 BuildParamsOneOf[T] — struct 类型
 
 | 测试用例 | 输入 | 期望输出 |
 |---------|------|---------|
 | 基本 struct | `struct { Name string \`json:"name"\` }` | `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}` |
 | 带 description tag | `struct { Name string \`json:"name" description:"用户名"\` }` | properties.name.description == "用户名" |
 | 带 enum tag | `struct { Status string \`json:"status" enum:"a,b,c"\` }` | properties.status.enum == ["a","b","c"] |
-| 带 minimum/maximum | `struct { Score int \`json:"score" minimum:"0" maximum:"100"\` }` | properties.score.minimum == 0, maximum == 100 |
+| ~~带 minimum/maximum~~ | ~~`struct { Score int \`json:"score" minimum:"0" maximum:"100"\` }`~~ | ⚠️ **未实现** — 当前不支持 minimum/maximum tag |
 | optional 字段（omitempty） | `struct { Name string \`json:"name,omitempty"\` }` | Name 不在 required 列表中 |
 | 嵌套 struct | `struct { Addr Address \`json:"addr"\` }` | addr 字段递归生成嵌套 schema |
 | 嵌套 slice | `struct { Tags []string \`json:"tags"\` }` | tags 为 array 类型，items 为 string |
@@ -42,7 +42,7 @@
 | 空 struct | `struct{}` | `{"type":"object","properties":{}}` |
 | 匿名嵌入 | `struct { BaseModel; Extra string }` | BaseModel 的字段展平到顶层 |
 
-### 2.2 SchemaFor[T] — 原始类型
+### 2.2 BuildParamsOneOf[T] — 原始类型
 
 | 测试用例 | 输入类型 | 期望 JSON Schema |
 |---------|---------|-----------------|
@@ -62,11 +62,11 @@
 
 | 测试用例 | 输入 | 期望 |
 |---------|------|------|
-| struct 类型 | `GenerateOutputTool[MyStruct](schema)` | tool name == "final_result"，参数 schema 正确 |
-| 原始类型 | `GenerateOutputTool[int](schema)` | tool name == "final_result"，参数包含 result 字段 |
+| struct 类型 | `GenerateOutputTool[MyStruct](paramsOneOf)` | tool name == "final_result"，参数 schema 正确 |
+| 原始类型 | `GenerateOutputTool[int](paramsOneOf)` | tool name == "final_result"，参数包含 result 字段 |
 | tool description | 任意类型 | description 包含 "final response" |
 
-### 3.2 ParseOutput
+### 3.2 ParseStructuredOutput
 
 | 测试用例 | 输入 JSON | 期望 |
 |---------|----------|------|
@@ -101,7 +101,7 @@
 |---------|------|------|
 | OutputValidator 触发重试 | validator 返回 ModelRetry | 模型被再次调用，retry 消息在对话中 |
 | Tool 返回 ModelRetry | tool 函数返回 ModelRetry | tool error 反馈给模型，retry 计数 +1 |
-| 超过 max retries | 连续失败 > max_retries | 返回 MaxRetriesError |
+| 超过 max retries | 连续失败 > max_retries | 返回 ToolRetriesExceededError / ResultRetriesExceededError |
 | 重试后成功 | 第一次验证失败，第二次成功 | 最终正确返回 |
 | 模型返回纯文本（O≠string） | 模型不调 output tool | 反馈 "please call the function"，触发 retry |
 
@@ -184,7 +184,7 @@
 | 超出预设响应 | 设置 2 个响应，调用 3 次 | 第 3 次返回错误 |
 | 记录调用 | 调用 2 次 | CallCount() == 2, AllCalls() 长度 == 2 |
 | LastCall | 调用后 | LastCall() 返回最近一次的 messages 和 tools |
-| 实现 ChatModel 接口 | 类型断言 | 实现 model.ChatModel |
+| 实现 BaseChatModel 接口 | 类型断言 | 实现 model.BaseChatModel |
 | Stream 模式 | 调用 Stream | 返回 StreamReader |
 
 ### 6.2 FunctionModel
@@ -226,7 +226,7 @@
 
 | 测试用例 | 场景 | 期望错误类型 |
 |---------|------|-------------|
-| max retries 超限 | 连续 retry > max_retries | MaxRetriesError |
+| max retries 超限 | 连续 retry > max_retries | ToolRetriesExceededError / ResultRetriesExceededError |
 | usage limit 超限 | token/request 超限 | UsageLimitExceeded |
 | 模型 API 错误 | ChatModel.Generate 返回 error | 原始错误透传 |
 | Tool 函数 panic | tool 内 panic | 不崩溃，作为 error 处理 |
@@ -251,7 +251,7 @@
 | 测试用例 | 度量 |
 |---------|------|
 | Agent 创建 | ns/op, allocs/op |
-| SchemaFor struct | ns/op（应缓存） |
+| BuildParamsOneOf struct | ns/op（应缓存） |
 | JSON 解析 + 验证 | ns/op |
 | RunContext 注入/提取 | ns/op |
 
