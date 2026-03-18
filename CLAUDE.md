@@ -27,7 +27,7 @@ This is a **Pydantic AI-style agent framework for Go** built on [cloudwego/eino]
 - **`agent/`** — Core package. Contains `Agent[D, O]` (the main generic agent), `RunContext[D]`, `Conversation[D, O]`, union types (`OneOf2`, `OneOf3`), options, result types, and retry/error types.
 - **`output/`** — Structured output machinery: JSON schema generation from Go struct tags, output tool creation (`final_result`), parsing (struct and primitive wrapper), and output validation.
 - **`direct/`** — Lightweight one-shot model calls (`RequestText`, `Request[T]`) without the agent loop, tools, or retries.
-- **`deps/`** — Convenience re-exports of `agent.GetDeps` and `agent.GetRunContext` for use in Eino tool implementations.
+- **`deps/`** — Convenience re-exports of `agent.GetDeps`, `agent.GetRunContext`, and `agent.GetMetadata` for use in Eino tool implementations.
 - **`testutil/`** — `TestModel` (pre-configured response sequences), `FunctionModel` (custom generate logic), and assertion helpers (`AssertToolCalled`, `AssertToolRegistered`, `AssertSystemPromptContains`, etc.).
 
 ### Key Design Patterns

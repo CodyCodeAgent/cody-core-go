@@ -80,6 +80,7 @@ When writing tests:
 | `direct/` | Lightweight one-shot model calls without agent loop |
 | `deps/` | Dependency injection helpers (re-exports from `agent`) |
 | `testutil/` | `TestModel`, `FunctionModel`, assertion helpers |
+| `examples/` | Runnable examples (quickstart, union-types, validator, conversation) |
 
 ## Reporting Issues
 
