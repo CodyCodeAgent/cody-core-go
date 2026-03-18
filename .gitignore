@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+quickstart
 
 # Test binary
 *.test
