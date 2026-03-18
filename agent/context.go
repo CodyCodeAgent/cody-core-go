@@ -19,8 +19,6 @@ type RunContext[D any] struct {
 	Usage *UsageTracker
 	// Metadata holds additional run-level metadata.
 	Metadata map[string]any
-	// Retry is the current result retry count.
-	Retry int
 }
 
 // UsageTracker accumulates token usage across multiple model calls in a single run.
@@ -110,4 +108,14 @@ func GetDeps[D any](ctx context.Context) (D, bool) {
 		return zero, false
 	}
 	return rc.Deps, true
+}
+
+// GetMetadata extracts the run-level metadata from a context.Context.
+// Returns nil if no metadata was set or the RunContext is not found.
+func GetMetadata[D any](ctx context.Context) map[string]any {
+	rc, ok := GetRunContext[D](ctx)
+	if !ok {
+		return nil
+	}
+	return rc.Metadata
 }

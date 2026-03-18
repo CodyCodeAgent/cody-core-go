@@ -323,18 +323,16 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 
 // RunStream executes the agent with streaming output.
 //
-// NOTE: The current implementation is a placeholder that wraps Run() in a goroutine.
-// It does NOT provide true token-by-token streaming — the full response is sent as a
-// single chunk after the agent loop completes. True streaming (using chatModel.Stream)
-// is planned for a future release.
+// EXPERIMENTAL: The current implementation wraps Run() in a goroutine and does NOT
+// provide true token-by-token streaming — the full response is sent as a single chunk
+// after the agent loop completes. True streaming (using chatModel.Stream) is planned
+// for a future release.
 func (a *Agent[D, O]) RunStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult[O], error) {
 	if len(a.initErrors) > 0 {
 		return nil, fmt.Errorf("agent initialization errors: %v", a.initErrors)
 	}
 
-	sr := &StreamResult[O]{
-		done: make(chan struct{}),
-	}
+	sr := &StreamResult[O]{}
 
 	sr.agentLoop = func() {
 		result, err := a.Run(ctx, prompt, deps, opts...)

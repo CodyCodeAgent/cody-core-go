@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/codycode/cody-core-go/agent"
 	"github.com/codycode/cody-core-go/testutil"
 )
 
@@ -79,7 +80,7 @@ func TestRequestText_WithModelSettings(t *testing.T) {
 	topP := float32(0.9)
 
 	_, err := RequestText(context.Background(), tm, "Test",
-		WithModelSettings(ModelSettings{
+		WithModelSettings(agent.ModelSettings{
 			Temperature: &temp,
 			MaxTokens:   &maxTok,
 			TopP:        &topP,

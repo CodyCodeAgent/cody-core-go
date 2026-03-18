@@ -25,8 +25,14 @@ func GetDeps[D any](ctx context.Context) (D, bool) {
 }
 
 // GetRunContext extracts the full RunContext from a context.Context.
-// Use this when you need access to usage tracking or retry information
+// Use this when you need access to usage tracking or metadata
 // in addition to dependencies.
 func GetRunContext[D any](ctx context.Context) (*agent.RunContext[D], bool) {
 	return agent.GetRunContext[D](ctx)
+}
+
+// GetMetadata extracts the run-level metadata from a context.Context.
+// Returns nil if no metadata was set or the RunContext is not found.
+func GetMetadata[D any](ctx context.Context) map[string]any {
+	return agent.GetMetadata[D](ctx)
 }

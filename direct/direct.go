@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/codycode/cody-core-go/agent"
 	"github.com/codycode/cody-core-go/output"
 )
 
@@ -18,16 +19,7 @@ type RequestOption func(*requestConfig)
 type requestConfig struct {
 	systemPrompt  string
 	messages      []*schema.Message
-	modelSettings *ModelSettings
-}
-
-// ModelSettings configures model parameters for direct requests.
-// Use pointer fields to distinguish "not set" from zero values.
-type ModelSettings struct {
-	Temperature *float32
-	MaxTokens   *int
-	TopP        *float32
-	Stop        []string
+	modelSettings *agent.ModelSettings
 }
 
 // WithSystemPrompt sets a system prompt for the request.
@@ -45,7 +37,7 @@ func WithMessages(msgs []*schema.Message) RequestOption {
 }
 
 // WithModelSettings sets model parameters for the request.
-func WithModelSettings(settings ModelSettings) RequestOption {
+func WithModelSettings(settings agent.ModelSettings) RequestOption {
 	return func(c *requestConfig) {
 		c.modelSettings = &settings
 	}

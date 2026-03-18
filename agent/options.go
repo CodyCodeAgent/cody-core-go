@@ -151,6 +151,15 @@ func WithMaxResultRetries[D, O any](n int) Option[D, O] {
 	}
 }
 
+// WithMaxIterations sets the maximum number of agent loop iterations.
+// Each iteration includes a model call and optional tool execution.
+// Default is 20.
+func WithMaxIterations[D, O any](n int) Option[D, O] {
+	return func(a *Agent[D, O]) {
+		a.maxIterations = n
+	}
+}
+
 // ModelSettings configures model parameters for inference.
 // Use pointer fields to distinguish "not set" from zero values.
 type ModelSettings struct {

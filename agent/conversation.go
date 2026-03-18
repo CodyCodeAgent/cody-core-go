@@ -42,11 +42,7 @@ func (c *Conversation[D, O]) Send(ctx context.Context, prompt string, deps D, op
 }
 
 // SendStream sends a message with streaming and carries forward conversation history.
-//
-// NOTE: SendStream does NOT update conversation history automatically because the
-// stream may not have completed yet. To preserve history after streaming, call
-// StreamResult.Final() and then use Send for subsequent turns, or manage history
-// manually via Messages() and Reset().
+// Conversation history is automatically updated when StreamResult.Final() is called.
 func (c *Conversation[D, O]) SendStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult[O], error) {
 	allOpts := make([]RunOption, 0, len(opts)+1)
 	if len(c.messages) > 0 {
@@ -54,7 +50,19 @@ func (c *Conversation[D, O]) SendStream(ctx context.Context, prompt string, deps
 	}
 	allOpts = append(allOpts, opts...)
 
-	return c.agent.RunStream(ctx, prompt, deps, allOpts...)
+	sr, err := c.agent.RunStream(ctx, prompt, deps, allOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Link back to conversation so Final() can auto-update history
+	sr.conv = &conversationRef{
+		setMessages: func(msgs []*schema.Message) {
+			c.messages = msgs
+		},
+	}
+
+	return sr, nil
 }
 
 // Messages returns the current conversation history.

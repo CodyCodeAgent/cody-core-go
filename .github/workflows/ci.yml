@@ -41,6 +41,14 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Build examples
+        run: go build ./examples/...
+
       - name: Vet
         run: go vet ./...
 
