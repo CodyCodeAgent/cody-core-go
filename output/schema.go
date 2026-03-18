@@ -246,9 +246,7 @@ func stripMarkdownFences(data []byte) []byte {
 			s = s[idx+1:]
 		}
 		// Remove closing fence
-		if strings.HasSuffix(s, "```") {
-			s = s[:len(s)-3]
-		}
+		s = strings.TrimSuffix(s, "```")
 		s = strings.TrimSpace(s)
 	}
 	return []byte(s)

@@ -270,14 +270,14 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 			}
 
 			// Run validators
-			validatedOutput, err := output.RunValidators(ctx, parsedOutput, a.outputValidators)
-			if err != nil {
-				if retryErr, ok := IsModelRetry(err); ok {
+			validatedOutput, valErr := output.RunValidators(ctx, parsedOutput, a.outputValidators)
+			if valErr != nil {
+				if retryErr, ok := IsModelRetry(valErr); ok {
 					resultRetries++
 					if resultRetries > a.maxResultRetries {
 						return nil, &ResultRetriesExceededError{
 							MaxRetries: a.maxResultRetries,
-							LastError:  err,
+							LastError:  valErr,
 						}
 					}
 					messages = append(messages, &schema.Message{
@@ -287,7 +287,7 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 					})
 					continue
 				}
-				return nil, fmt.Errorf("output validation: %w", err)
+				return nil, fmt.Errorf("output validation: %w", valErr)
 			}
 
 			// Add skipped tool responses for regular tools (early strategy)

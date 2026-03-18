@@ -40,7 +40,7 @@ func (u OneOf2[A, B]) Value() any { return u.value }
 // Match dispatches to the appropriate handler based on the actual type.
 // This provides compile-time safety by requiring handlers for both types.
 func (u OneOf2[A, B]) Match(onA func(A), onB func(B)) {
-	switch v := u.value.(type) {
+	switch v := u.value.(type) { //nolint:gocritic // case order matches type parameter order A, B
 	case A:
 		onA(v)
 	case B:
@@ -73,7 +73,7 @@ func (u OneOf3[A, B, C]) Value() any { return u.value }
 
 // Match dispatches to the appropriate handler based on the actual type.
 func (u OneOf3[A, B, C]) Match(onA func(A), onB func(B), onC func(C)) {
-	switch v := u.value.(type) {
+	switch v := u.value.(type) { //nolint:gocritic // case order matches type parameter order A, B, C
 	case A:
 		onA(v)
 	case B:

@@ -102,10 +102,10 @@ func TestTestModel_CallCount(t *testing.T) {
 
 	assert.Equal(t, 0, tm.CallCount())
 
-	tm.Generate(context.Background(), nil)
+	_, _ = tm.Generate(context.Background(), nil)
 	assert.Equal(t, 1, tm.CallCount())
 
-	tm.Generate(context.Background(), nil)
+	_, _ = tm.Generate(context.Background(), nil)
 	assert.Equal(t, 2, tm.CallCount())
 }
 

@@ -11,7 +11,7 @@ import (
 func TestAssertToolRegistered(t *testing.T) {
 	tm := NewTestModel(TestResponse{Text: "ok"})
 
-	tm.Generate(context.Background(), []*schema.Message{
+	_, _ = tm.Generate(context.Background(), []*schema.Message{
 		{Role: schema.User, Content: "test"},
 	})
 
@@ -21,7 +21,7 @@ func TestAssertToolRegistered(t *testing.T) {
 func TestAssertSystemPromptContains(t *testing.T) {
 	tm := NewTestModel(TestResponse{Text: "ok"})
 
-	tm.Generate(context.Background(), []*schema.Message{
+	_, _ = tm.Generate(context.Background(), []*schema.Message{
 		{Role: schema.System, Content: "You are a helpful assistant."},
 		{Role: schema.User, Content: "hi"},
 	})
@@ -33,7 +33,7 @@ func TestAssertSystemPromptContains(t *testing.T) {
 func TestAssertUserPromptSent(t *testing.T) {
 	tm := NewTestModel(TestResponse{Text: "ok"})
 
-	tm.Generate(context.Background(), []*schema.Message{
+	_, _ = tm.Generate(context.Background(), []*schema.Message{
 		{Role: schema.User, Content: "What is Go?"},
 	})
 
