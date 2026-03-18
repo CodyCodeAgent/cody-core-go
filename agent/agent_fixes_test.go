@@ -305,7 +305,8 @@ func TestAgent_Run_ToolMaxRetriesExceeded(t *testing.T) {
 
 	_, err := a.Run(context.Background(), "Do it", NoDeps{})
 	require.Error(t, err)
-	assert.IsType(t, &ToolRetriesExceededError{}, err)
+	var toolRetryErr *ToolRetriesExceededError
+	assert.True(t, errors.As(err, &toolRetryErr), "error should contain ToolRetriesExceededError")
 }
 
 // -- Fix verification: Tool regular error does NOT consume retries --
@@ -350,15 +351,15 @@ func TestAgent_Run_ModelSettingsOverride(t *testing.T) {
 	tm := testutil.NewTestModel(testutil.TestResponse{Text: "ok"})
 
 	a := New[NoDeps, string](tm,
-		WithModelSettings[NoDeps, string](map[string]any{
-			"temperature": 0.5,
-			"max_tokens":  100,
+		WithModelSettings[NoDeps, string](ModelSettings{
+			Temperature: Ptr(float32(0.5)),
+			MaxTokens:   Ptr(100),
 		}),
 	)
 
 	_, err := a.Run(context.Background(), "Hi", NoDeps{},
-		WithRunModelSettings(map[string]any{
-			"temperature": 0.9, // Override
+		WithRunModelSettings(ModelSettings{
+			Temperature: Ptr(float32(0.9)), // Override
 		}),
 	)
 	require.NoError(t, err)

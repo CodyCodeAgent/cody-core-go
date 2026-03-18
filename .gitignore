@@ -1,0 +1,36 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+quickstart
+
+# Test binary
+*.test
+
+# Go build cache
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Coverage
+coverage.out
+coverage.html
+
+# Vendor (we use modules)
+vendor/
+
+# Environment
+.env
+.env.local

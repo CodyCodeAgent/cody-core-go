@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
@@ -127,13 +128,6 @@ func WithToolFunc[D, O any, Args any](
 	}
 }
 
-// WithOutputMode sets the structured output mode (Tool, Native, Prompted).
-func WithOutputMode[D, O any](mode output.Mode) Option[D, O] {
-	return func(a *Agent[D, O]) {
-		a.outputMode = mode
-	}
-}
-
 // WithOutputValidator adds an output validation function.
 func WithOutputValidator[D, O any](fn output.ValidatorFunc[O]) Option[D, O] {
 	return func(a *Agent[D, O]) {
@@ -157,10 +151,78 @@ func WithMaxResultRetries[D, O any](n int) Option[D, O] {
 	}
 }
 
-// WithModelSettings sets model parameters (temperature, max_tokens, etc.).
-func WithModelSettings[D, O any](settings map[string]any) Option[D, O] {
+// WithMaxIterations sets the maximum number of agent loop iterations.
+// Each iteration includes a model call and optional tool execution.
+// Default is 20.
+func WithMaxIterations[D, O any](n int) Option[D, O] {
 	return func(a *Agent[D, O]) {
-		a.modelSettings = settings
+		a.maxIterations = n
+	}
+}
+
+// ModelSettings configures model parameters for inference.
+// Use pointer fields to distinguish "not set" from zero values.
+type ModelSettings struct {
+	Temperature *float32
+	MaxTokens   *int
+	TopP        *float32
+	Stop        []string
+}
+
+// toModelOptions converts ModelSettings to Eino model options.
+func (s *ModelSettings) toModelOptions() []model.Option {
+	if s == nil {
+		return nil
+	}
+	var opts []model.Option
+	if s.Temperature != nil {
+		opts = append(opts, model.WithTemperature(*s.Temperature))
+	}
+	if s.MaxTokens != nil {
+		opts = append(opts, model.WithMaxTokens(*s.MaxTokens))
+	}
+	if s.TopP != nil {
+		opts = append(opts, model.WithTopP(*s.TopP))
+	}
+	if len(s.Stop) > 0 {
+		opts = append(opts, model.WithStop(s.Stop))
+	}
+	return opts
+}
+
+// mergeModelSettings merges base and override settings.
+// Override fields take precedence when set (non-nil).
+func mergeModelSettings(base, override *ModelSettings) *ModelSettings {
+	if base == nil {
+		return override
+	}
+	if override == nil {
+		return base
+	}
+	merged := *base
+	if override.Temperature != nil {
+		merged.Temperature = override.Temperature
+	}
+	if override.MaxTokens != nil {
+		merged.MaxTokens = override.MaxTokens
+	}
+	if override.TopP != nil {
+		merged.TopP = override.TopP
+	}
+	if override.Stop != nil {
+		merged.Stop = override.Stop
+	}
+	return &merged
+}
+
+// Ptr returns a pointer to the given value.
+// Useful for setting optional ModelSettings fields: agent.Ptr(float32(0.7)).
+func Ptr[T any](v T) *T { return &v }
+
+// WithModelSettings sets model parameters (temperature, max_tokens, etc.).
+func WithModelSettings[D, O any](settings ModelSettings) Option[D, O] {
+	return func(a *Agent[D, O]) {
+		a.modelSettings = &settings
 	}
 }
 
@@ -170,16 +232,16 @@ type RunOption func(r *runConfig)
 type runConfig struct {
 	history       []*schema.Message
 	usageLimits   *UsageLimits
-	modelSettings map[string]any
+	modelSettings *ModelSettings
 	metadata      map[string]any
 }
 
 // UsageLimits defines limits for a single agent run.
 type UsageLimits struct {
-	RequestLimit       int // Max number of model calls (0 = unlimited)
-	RequestTokensLimit int // Max prompt tokens (0 = unlimited)
+	RequestLimit        int // Max number of model calls (0 = unlimited)
+	RequestTokensLimit  int // Max prompt tokens (0 = unlimited)
 	ResponseTokensLimit int // Max completion tokens (0 = unlimited)
-	TotalTokensLimit   int // Max total tokens (0 = unlimited)
+	TotalTokensLimit    int // Max total tokens (0 = unlimited)
 }
 
 // WithHistory passes message history for multi-turn conversations.
@@ -197,9 +259,9 @@ func WithUsageLimits(limits UsageLimits) RunOption {
 }
 
 // WithRunModelSettings overrides model settings for this run.
-func WithRunModelSettings(settings map[string]any) RunOption {
+func WithRunModelSettings(settings ModelSettings) RunOption {
 	return func(r *runConfig) {
-		r.modelSettings = settings
+		r.modelSettings = &settings
 	}
 }
 

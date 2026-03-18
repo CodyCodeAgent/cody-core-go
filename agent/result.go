@@ -21,9 +21,10 @@ type Result[O any] struct {
 
 // NewMessages returns only the messages generated during this run
 // (excludes message_history and system messages).
+// Returns an empty slice (not nil) if there are no new messages.
 func (r *Result[O]) NewMessages() []*schema.Message {
 	if r.newMessageStart >= len(r.allMessages) {
-		return nil
+		return []*schema.Message{}
 	}
 	return r.allMessages[r.newMessageStart:]
 }
@@ -34,7 +35,17 @@ func (r *Result[O]) AllMessages() []*schema.Message {
 	return r.allMessages
 }
 
+// conversationRef holds a reference back to a conversation for auto-updating
+// history after streaming completes.
+type conversationRef struct {
+	setMessages func([]*schema.Message)
+}
+
 // StreamResult provides streaming access to an agent's output.
+//
+// EXPERIMENTAL: The current implementation wraps Run() in a goroutine and does NOT
+// provide true token-by-token streaming. The full response is sent as a single chunk
+// after the agent loop completes. True streaming is planned for a future release.
 type StreamResult[O any] struct {
 	stream      *schema.StreamReader[*schema.Message]
 	textCh      chan string
@@ -42,6 +53,9 @@ type StreamResult[O any] struct {
 	finalErr    error
 	done        chan struct{}
 	once        sync.Once
+
+	// conv is set when created via Conversation.SendStream to auto-update history.
+	conv *conversationRef
 
 	// For internal use by the agent loop
 	agentLoop func()
@@ -78,6 +92,8 @@ func (s *StreamResult[O]) TextStream() <-chan string {
 }
 
 // Final waits for the stream to complete and returns the final result.
+// If the StreamResult was created via Conversation.SendStream, Final automatically
+// updates the conversation history upon success.
 func (s *StreamResult[O]) Final() (*Result[O], error) {
 	// Ensure streaming has started
 	s.TextStream()
@@ -87,6 +103,10 @@ func (s *StreamResult[O]) Final() (*Result[O], error) {
 	<-s.done
 	if s.finalErr != nil {
 		return nil, s.finalErr
+	}
+	// Auto-update conversation history if linked to a conversation
+	if s.conv != nil && s.finalResult != nil {
+		s.conv.setMessages(s.finalResult.AllMessages())
 	}
 	return s.finalResult, nil
 }

@@ -56,8 +56,19 @@ func TestUsageTracker(t *testing.T) {
 	tracker.AddTokens(100, 50, 150)
 	tracker.AddTokens(200, 100, 300)
 
-	assert.Equal(t, 2, tracker.Requests)
-	assert.Equal(t, 300, tracker.RequestTokens)
-	assert.Equal(t, 150, tracker.ResponseTokens)
-	assert.Equal(t, 450, tracker.TotalTokens)
+	assert.Equal(t, 2, tracker.Requests())
+	assert.Equal(t, 300, tracker.RequestTokens())
+	assert.Equal(t, 150, tracker.ResponseTokens())
+	assert.Equal(t, 450, tracker.TotalTokens())
+}
+
+func TestUsageTracker_Snapshot(t *testing.T) {
+	tracker := &UsageTracker{}
+	tracker.AddTokens(100, 50, 150)
+
+	requests, reqTokens, respTokens, totalTokens := tracker.Snapshot()
+	assert.Equal(t, 1, requests)
+	assert.Equal(t, 100, reqTokens)
+	assert.Equal(t, 50, respTokens)
+	assert.Equal(t, 150, totalTokens)
 }

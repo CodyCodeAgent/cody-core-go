@@ -58,8 +58,7 @@ func BuildParamsOneOf[T any]() (*schema.ParamsOneOf, error) {
 // buildStructParamsOneOf generates ParamsOneOf from a struct type.
 func buildStructParamsOneOf(t reflect.Type) (*schema.ParamsOneOf, error) {
 	params := make(map[string]*schema.ParameterInfo)
-	required := collectStructFields(t, params)
-	_ = required
+	collectStructFields(t, params)
 	return schema.NewParamsOneOfByParams(params), nil
 }
 
