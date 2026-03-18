@@ -167,6 +167,50 @@ func TestRunStream_MultiChunkStreaming(t *testing.T) {
 	assert.Equal(t, "Hello, world!", result.Output)
 }
 
+func TestRunStream_StreamingToolCallArgs(t *testing.T) {
+	// Simulate tool call arguments arriving in multiple chunks (like real OpenAI streaming)
+	// Chunk 1: tool call ID + name + partial args
+	// Chunk 2: remaining args
+	cm := testutil.NewChunkingModelFromMessages([]*schema.Message{
+		{
+			Role: schema.Assistant,
+			ToolCalls: []schema.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: schema.FunctionCall{
+					Name:      "final_result",
+					Arguments: `{"city":"Tok`,
+				},
+			}},
+		},
+		{
+			Role: schema.Assistant,
+			ToolCalls: []schema.ToolCall{{
+				ID:       "call_1",
+				Function: schema.FunctionCall{Arguments: `yo","temperat`},
+			}},
+		},
+		{
+			Role: schema.Assistant,
+			ToolCalls: []schema.ToolCall{{
+				ID:       "call_1",
+				Function: schema.FunctionCall{Arguments: `ure":18.5,"condition":"sunny"}`},
+			}},
+		},
+	})
+
+	a := New[NoDeps, TestOutput](cm)
+
+	sr, err := a.RunStream(context.Background(), "Weather?", NoDeps{})
+	require.NoError(t, err)
+
+	result, err := sr.Final()
+	require.NoError(t, err)
+	assert.Equal(t, "Tokyo", result.Output.City)
+	assert.Equal(t, 18.5, result.Output.Temperature)
+	assert.Equal(t, "sunny", result.Output.Condition)
+}
+
 func TestRunStream_Close(t *testing.T) {
 	// Close should not panic even without a real stream
 	sr := &StreamResult[string]{}

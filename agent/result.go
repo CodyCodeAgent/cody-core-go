@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"io"
 	"sync"
 
 	"github.com/cloudwego/eino/schema"
@@ -45,7 +44,6 @@ type conversationRef struct {
 // Text chunks are forwarded in real-time via TextStream() as they arrive from the model.
 // Call Final() to wait for the agent loop to complete and get the typed result.
 type StreamResult[O any] struct {
-	stream      *schema.StreamReader[*schema.Message]
 	textCh      chan string
 	finalResult *Result[O]
 	finalErr    error
@@ -55,7 +53,7 @@ type StreamResult[O any] struct {
 	// conv is set when created via Conversation.SendStream to auto-update history.
 	conv *conversationRef
 
-	// For internal use by the agent loop
+	// agentLoop runs the streaming agent loop inside a goroutine started by TextStream.
 	agentLoop func()
 }
 
@@ -67,23 +65,7 @@ func (s *StreamResult[O]) TextStream() <-chan string {
 		go func() {
 			defer close(s.textCh)
 			defer close(s.done)
-			if s.agentLoop != nil {
-				s.agentLoop()
-				return
-			}
-			// Simple stream forwarding
-			for {
-				msg, err := s.stream.Recv()
-				if err != nil {
-					if err != io.EOF {
-						s.finalErr = err
-					}
-					return
-				}
-				if msg.Content != "" {
-					s.textCh <- msg.Content
-				}
-			}
+			s.agentLoop()
 		}()
 	})
 	return s.textCh
@@ -109,9 +91,5 @@ func (s *StreamResult[O]) Final() (*Result[O], error) {
 	return s.finalResult, nil
 }
 
-// Close releases resources associated with the stream.
-func (s *StreamResult[O]) Close() {
-	if s.stream != nil {
-		s.stream.Close()
-	}
-}
+// Close is a no-op retained for API compatibility.
+func (s *StreamResult[O]) Close() {}
