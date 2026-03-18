@@ -1,7 +1,7 @@
 # cody-core-go
 
-[![CI](https://github.com/codycode/cody-core-go/actions/workflows/ci.yml/badge.svg)](https://github.com/codycode/cody-core-go/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/codycode/cody-core-go.svg)](https://pkg.go.dev/github.com/codycode/cody-core-go)
+[![CI](https://github.com/CodyCodeAgent/cody-core-go/actions/workflows/ci.yml/badge.svg)](https://github.com/CodyCodeAgent/cody-core-go/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/CodyCodeAgent/cody-core-go.svg)](https://pkg.go.dev/github.com/CodyCodeAgent/cody-core-go)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 A Pydantic AI-style agent framework for Go, built on [cloudwego/eino](https://github.com/cloudwego/eino). Type-safe agents with structured output, dependency injection, and automatic validation retries.
