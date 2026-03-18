@@ -310,7 +310,7 @@ type SearchParams struct {
 ```
 
 **关键发现**：
-- `GoStruct2ParamsOneOf[T]()` 和 `GoStruct2ToolInfo[T]()` 已导出 → 可直接复用生成 output tool schema，**不需要自己实现 SchemaFor[T]**
+- `GoStruct2ParamsOneOf[T]()` 和 `GoStruct2ToolInfo[T]()` 已导出（但我们最终采用了自定义 `output.BuildParamsOneOf[T]()` 以支持更多 tag 格式）
 - tag 格式是 `jsonschema:"required,description=xxx,enum=10,enum=20"`
 - 函数签名是 `func(ctx, T) (D, error)`，不是 `func(ctx, T) (string, error)` — InferTool 内部会 JSON 序列化 D
 

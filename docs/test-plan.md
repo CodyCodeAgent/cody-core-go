@@ -184,7 +184,7 @@
 | 超出预设响应 | 设置 2 个响应，调用 3 次 | 第 3 次返回错误 |
 | 记录调用 | 调用 2 次 | CallCount() == 2, AllCalls() 长度 == 2 |
 | LastCall | 调用后 | LastCall() 返回最近一次的 messages 和 tools |
-| 实现 ChatModel 接口 | 类型断言 | 实现 model.ChatModel |
+| 实现 BaseChatModel 接口 | 类型断言 | 实现 model.BaseChatModel |
 | Stream 模式 | 调用 Stream | 返回 StreamReader |
 
 ### 6.2 FunctionModel
@@ -251,7 +251,7 @@
 | 测试用例 | 度量 |
 |---------|------|
 | Agent 创建 | ns/op, allocs/op |
-| SchemaFor struct | ns/op（应缓存） |
+| BuildParamsOneOf struct | ns/op（应缓存） |
 | JSON 解析 + 验证 | ns/op |
 | RunContext 注入/提取 | ns/op |
 

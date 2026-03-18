@@ -99,7 +99,7 @@
 
 | Eino 概念 | Pydantic AI 对应 | 关系 |
 |-----------|-----------------|------|
-| `components/model.ChatModel` | Model 接口 | **直接使用**，不再封装 |
+| `components/model.BaseChatModel` | Model 接口 | **直接使用**，不再封装 |
 | `schema.Message` / `schema.SystemMessage` / `schema.UserMessage` | Message 类型体系 | **直接使用** |
 | `components/tool.InferableTool` + `utils.InferTool()` | `@agent.tool` 装饰器注册 | **直接使用**，Eino 已能从函数签名推断 schema |
 | `adk.ChatModelAgent` | Agent.run()（ReAct loop） | **封装增强**，加结构化输出 + 验证 |
@@ -156,7 +156,7 @@ cody-core-go/
 │   └── deps.go                         # RunContext 工具函数、依赖提取
 │
 ├── testutil/                           # 核心：测试工具
-│   ├── testmodel.go                    # TestModel（实现 Eino ChatModel 接口）
+│   ├── testmodel.go                    # TestModel（实现 Eino BaseChatModel 接口）
 │   ├── funcmodel.go                    # FunctionModel
 │   └── assertions.go                   # Agent 测试断言辅助
 │
@@ -188,8 +188,10 @@ import (
     "context"
 
     "github.com/cloudwego/eino/components/model"
-    einotool "github.com/cloudwego/eino/components/tool"
+    "github.com/cloudwego/eino/components/tool"
     "github.com/cloudwego/eino/schema"
+
+    "github.com/codycode/cody-core-go/output"
 )
 
 // Agent 是框架的核心抽象
@@ -376,8 +378,8 @@ func ParseStructuredOutput[T any](data []byte) (T, error)
 package agent
 
 import (
-    einotool "github.com/cloudwego/eino/components/tool"
-    "github.com/cloudwego/eino/components/tool/utils"
+    "github.com/cloudwego/eino/components/tool"
+    "github.com/codycode/cody-core-go/output"
 )
 
 // WithToolFunc 便捷创建带依赖注入的工具
@@ -439,7 +441,7 @@ import (
     "github.com/cloudwego/eino/schema"
 )
 
-// TestModel 实现 Eino 的 model.ChatModel 接口
+// TestModel 实现 Eino 的 model.BaseChatModel 接口
 // 用于单元测试，不调用真实 API
 type TestModel struct {
     responses []TestResponse    // 预设的响应序列
@@ -492,11 +494,11 @@ import (
 )
 
 // RequestText 最简调用，返回纯文本
-func RequestText(ctx context.Context, chatModel model.ChatModel, prompt string, opts ...RequestOption) (string, error)
+func RequestText(ctx context.Context, chatModel model.BaseChatModel, prompt string, opts ...RequestOption) (string, error)
 
 // Request 带结构化输出的直接调用
 // 内部：构建 messages + output tool → chatModel.Generate → 反序列化为 T
-func Request[T any](ctx context.Context, chatModel model.ChatModel, prompt string, opts ...RequestOption) (T, error)
+func Request[T any](ctx context.Context, chatModel model.BaseChatModel, prompt string, opts ...RequestOption) (T, error)
 
 // RequestOption 可选参数
 func WithSystemPrompt(prompt string) RequestOption
@@ -979,10 +981,10 @@ mainAgent := agent.New[MyDeps, MainResult](chatModel,
 
 ```go
 func TestOrderAgent(t *testing.T) {
-    // TestModel 实现了 Eino ChatModel 接口
+    // TestModel 实现了 Eino BaseChatModel 接口
     tm := testutil.NewTestModel(
         testutil.TestResponse{
-            ToolCalls: []*schema.ToolCall{{
+            ToolCalls: []schema.ToolCall{{
                 Function: schema.FunctionCall{
                     Name:      "get_order",
                     Arguments: `{"order_id":"ORD-1"}`,
@@ -990,7 +992,7 @@ func TestOrderAgent(t *testing.T) {
             }},
         },
         testutil.TestResponse{
-            ToolCalls: []*schema.ToolCall{{
+            ToolCalls: []schema.ToolCall{{
                 Function: schema.FunctionCall{
                     Name:      "final_result",
                     Arguments: `{"order_id":"ORD-1","total_amount":99.9,"status":"completed","summary":"test"}`,
@@ -1034,14 +1036,14 @@ myAgent := agent.New[agent.NoDeps, string](
 |------|--------|----------|
 | `output/schema.go` | struct / 原始类型 / 切片 → JSON Schema 自动生成 | 无 |
 | `output/tool_output.go` | "final_result" output tool 生成 | `components/tool` |
-| `output/validator.go` | OutputValidator + ParseOutput | 无 |
+| `output/validator.go` | OutputValidator + RunValidators | 无 |
 | `agent/context.go` | `RunContext[D]` + context.Value 注入 | 无 |
 | `agent/retry.go` | `ErrModelRetry` | 无 |
-| `agent/agent.go` | `Agent[D,O]` 核心 + `Run()` + Agent Loop | `components/model.ChatModel`、`schema.Message` |
+| `agent/agent.go` | `Agent[D,O]` 核心 + `Run()` + Agent Loop | `components/model.BaseChatModel`、`schema.Message` |
 | `agent/options.go` | Option 模式 + `WithToolFunc` | `components/tool/utils.InferTool` |
 | `agent/result.go` | `Result[O]` | `schema.Message` |
-| `direct/direct.go` | `RequestText` / `Request[T]` 直接模型请求 | `components/model.ChatModel` |
-| `testutil/` | TestModel + FunctionModel | `components/model.ChatModel` |
+| `direct/direct.go` | `RequestText` / `Request[T]` 直接模型请求 | `components/model.BaseChatModel` |
+| `testutil/` | TestModel + FunctionModel | `components/model.BaseChatModel` |
 
 **验收标准：**
 - 能用 Eino OpenAI ChatModel 创建 Agent，注册 tool，运行完整 loop，得到类型化输出
@@ -1088,7 +1090,7 @@ myAgent := agent.New[agent.NoDeps, string](
 |------|--------|----------|
 | `agent/` | Callback 集成（适配 Eino Callback Handler） | `callbacks` |
 | `eval/` | Dataset + Case + 基础 Evaluator（ExactMatch/Contains） | 无 |
-| `eval/` | LLMJudge Evaluator | `components/model.ChatModel` |
+| `eval/` | LLMJudge Evaluator | `components/model.BaseChatModel` |
 
 ### Phase 5（远期）：高级 Eval + Graph 增强
 
@@ -1162,7 +1164,7 @@ stream, err := chatModel.Stream(ctx, messages, opts...)
 
 // 我们封装的层
 for chunk := range stream.Recv() {
-    // 解析 chunk → TextStream / OutputStream
+    // 解析 chunk → TextStream
 }
 ```
 
@@ -1201,7 +1203,7 @@ for chunk := range stream.Recv() {
 | MCP Client | ✅ | ✅ **直接用 eino-ext MCP** | P1 |
 | MCP Server | ✅ | ✅ **直接用 eino-ext MCP** | P1 |
 | OpenTelemetry | ✅ | ✅ **复用 Eino Callbacks** + 增强 | P4 |
-| TestModel | ✅ | ✅ 新建（实现 Eino ChatModel 接口） | P1 |
+| TestModel | ✅ | ✅ 新建（实现 Eino BaseChatModel 接口） | P1 |
 | FunctionModel | ✅ | ✅ 新建 | P1 |
 | 多模态输入 | ✅ | ✅ **复用 Eino schema.Message** multimodal | P3 |
 | Thinking 模式 | ✅ | ✅ **复用 Eino/eino-ext** Anthropic thinking | P2 |
@@ -1233,7 +1235,7 @@ for chunk := range stream.Recv() {
 1. **泛型类型安全** — `Agent[D, O]` 编译期保证输入输出类型正确
 2. **结构化输出 + 自动验证** — struct → JSON Schema → LLM → 反序列化 → 验证 → 自动重试，全自动
 3. **依赖注入** — `RunContext[D]` 让 tool 和 system prompt 可以安全访问运行时依赖
-4. **可测试** — TestModel 实现 Eino ChatModel 接口，零 API 调用单测
+4. **可测试** — TestModel 实现 Eino BaseChatModel 接口，零 API 调用单测
 5. **不造轮子** — 模型、工具、MCP、编排全部复用 Eino 成熟实现
 6. **可逃逸** — 用户随时可以降级到 Eino 原生 API，不被锁定
 
