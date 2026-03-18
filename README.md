@@ -1,5 +1,9 @@
 # cody-core-go
 
+[![CI](https://github.com/codycode/cody-core-go/actions/workflows/ci.yml/badge.svg)](https://github.com/codycode/cody-core-go/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/codycode/cody-core-go.svg)](https://pkg.go.dev/github.com/codycode/cody-core-go)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Pydantic AI-style agent framework for Go, built on top of [cloudwego/eino](https://github.com/cloudwego/eino).
 
 ## Features
@@ -63,11 +67,22 @@ cody-core-go/
 └── docs/        # Design documents
 ```
 
+## Examples
+
+See the [`examples/`](examples/) directory for runnable examples:
+
+- **[quickstart](examples/quickstart/)** — Structured output agent with `MovieReview`
+
+```bash
+go run ./examples/quickstart/
+```
+
 ## Testing
 
 ```bash
-go test ./...
-go test -race ./...
+go test ./...              # Run all tests
+go test -race ./...        # Run tests with race detector
+make check                 # Run vet + lint + test
 ```
 
 All tests use `TestModel` or `FunctionModel` — no real API calls needed.
@@ -82,3 +97,11 @@ Built on Eino's foundation (ChatModel, Tool, Message, StreamReader), this projec
 | **cody-core-go** | Generic Agent[D,O], structured output + validation, dependency injection, TestModel |
 
 See [docs/design.md](docs/design.md) for the full design document.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) for details.

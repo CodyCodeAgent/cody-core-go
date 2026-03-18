@@ -5,14 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-go test ./...              # Run all tests
-go test -race ./...        # Run all tests with race detector
+make check                 # Run all checks: vet + lint + test
+make test                  # Run all tests
+make test-race             # Run all tests with race detector
+make test-cover            # Run tests with coverage report
+make lint                  # Run golangci-lint
+make vet                   # Run go vet
+make fmt                   # Format code
 go test ./agent/...        # Run tests for a single package
 go test ./agent/ -run TestName  # Run a specific test
-go vet ./...               # Static analysis
 ```
 
-No Makefile, linter config, or CI pipeline exists yet. All tests use `testutil.TestModel` or `testutil.FunctionModel` — no real API calls or credentials needed.
+All tests use `testutil.TestModel` or `testutil.FunctionModel` — no real API calls or credentials needed. CI runs on every push/PR via GitHub Actions (`.github/workflows/ci.yml`).
 
 ## Architecture
 
