@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-03-18
+
+### Changed
+
+- **BREAKING**: Go module path changed from `github.com/codycode/cody-core-go` to `github.com/CodyCodeAgent/cody-core-go` — all import paths must be updated
+
 ## [v0.1.0] - 2026-03-18
 
 ### Added
