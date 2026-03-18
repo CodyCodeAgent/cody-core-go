@@ -19,13 +19,7 @@ func NewModelRetry(msg string) *ErrModelRetry {
 	return &ErrModelRetry{Message: msg}
 }
 
-// IsModelRetry checks if an error is an ErrModelRetry.
-func IsModelRetry(err error) (*ErrModelRetry, bool) {
-	if e, ok := err.(*ErrModelRetry); ok {
-		return e, true
-	}
-	return nil, false
-}
+// Note: IsModelRetry is defined in agent.go with errors.As support.
 
 // ToolRetriesExceededError is returned when a tool exceeds its max retry count.
 type ToolRetriesExceededError struct {

@@ -6,7 +6,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/cloudwego/eino/components/model"
@@ -33,6 +35,17 @@ type Agent[D any, O any] struct {
 	maxIterations    int
 	modelSettings    map[string]any
 	initErrors       []error
+
+	// outputTools overrides the default single output tool (used for union types).
+	outputTools []outputToolEntry
+	// outputParser overrides the default ParseStructuredOutput[O] (used for union types).
+	outputParser func(toolName string, argsJSON []byte) (O, error)
+}
+
+// outputToolEntry holds an output tool and its name for union type support.
+type outputToolEntry struct {
+	tool tool.InvokableTool
+	name string
 }
 
 // New creates a new Agent with the given ChatModel and options.
@@ -52,9 +65,9 @@ func New[D any, O any](chatModel model.BaseChatModel, opts ...Option[D, O]) *Age
 // WithModel returns a shallow copy of the agent with a different model.
 // Useful for testing with TestModel.
 func (a *Agent[D, O]) WithModel(m model.BaseChatModel) *Agent[D, O] {
-	copy := *a
-	copy.chatModel = m
-	return &copy
+	cp := *a
+	cp.chatModel = m
+	return &cp
 }
 
 // Run executes the agent synchronously and returns a typed result.
@@ -71,9 +84,10 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 	// Create RunContext
 	tracker := &UsageTracker{}
 	rc := &RunContext[D]{
-		Ctx:   ctx,
-		Deps:  deps,
-		Usage: tracker,
+		Ctx:      ctx,
+		Deps:     deps,
+		Usage:    tracker,
+		Metadata: cfg.metadata,
 	}
 
 	// Inject RunContext into context
@@ -96,26 +110,14 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 		Content: prompt,
 	})
 
-	// Collect tool infos and build tool map
-	userTools, outputTools, toolMap, err := a.prepareTools(ctx, rc)
-	if err != nil {
-		return nil, fmt.Errorf("prepare tools: %w", err)
-	}
-
-	allToolInfos := make([]*schema.ToolInfo, 0, len(userTools)+len(outputTools))
-	for _, t := range userTools {
-		info, err := t.Info(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("get tool info: %w", err)
+	// Build tool map (user tools only, used for execution)
+	toolMap := make(map[string]tool.InvokableTool)
+	for _, entry := range a.tools {
+		info, infoErr := entry.tool.Info(ctx)
+		if infoErr != nil {
+			return nil, fmt.Errorf("get tool info: %w", infoErr)
 		}
-		allToolInfos = append(allToolInfos, info)
-	}
-	for _, t := range outputTools {
-		info, err := t.Info(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("get output tool info: %w", err)
-		}
-		allToolInfos = append(allToolInfos, info)
+		toolMap[info.Name] = entry.tool
 	}
 
 	// Track retries
@@ -130,6 +132,12 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 		// Check usage limits before each model call
 		if err := checkUsageLimits(tracker, cfg.usageLimits); err != nil {
 			return nil, err
+		}
+
+		// Prepare tools per-iteration (run prepare callbacks each time)
+		allToolInfos, outputToolNames, err := a.buildToolInfos(ctx, rc)
+		if err != nil {
+			return nil, fmt.Errorf("build tool infos: %w", err)
 		}
 
 		// Prepare model options
@@ -159,7 +167,6 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 					*v = resp.Content
 				}
 
-				// Append messages (user prompt already in messages, add assistant response)
 				messages = append(messages, resp)
 				nonSystemMsgs := extractNonSystemMessages(messages, len(systemMsgs))
 
@@ -171,7 +178,31 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 				}, nil
 			}
 
-			// O != string but got text — trigger retry
+			// O != string but got text — try JSON parse first (per pydantic-ai-behavior.md §3.5)
+			if resp.Content != "" {
+				trimmed := strings.TrimSpace(resp.Content)
+				if trimmed != "" {
+					parsedOutput, parseErr := output.ParseStructuredOutput[O]([]byte(trimmed))
+					if parseErr == nil {
+						// Successfully parsed text as JSON — validate
+						validatedOutput, valErr := output.RunValidators(ctx, parsedOutput, a.outputValidators)
+						if valErr == nil {
+							messages = append(messages, resp)
+							nonSystemMsgs := extractNonSystemMessages(messages, len(systemMsgs))
+							return &Result[O]{
+								Output:          validatedOutput,
+								Usage:           usageFromTracker(tracker),
+								allMessages:     nonSystemMsgs,
+								newMessageStart: newMessageStart,
+							}, nil
+						}
+						// Validation failed — fall through to retry
+					}
+					// JSON parse failed — fall through to retry
+				}
+			}
+
+			// Text could not be parsed as JSON or was empty — trigger retry
 			resultRetries++
 			if resultRetries > a.maxResultRetries {
 				return nil, &ResultRetriesExceededError{
@@ -180,7 +211,6 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 				}
 			}
 
-			// Add assistant response and retry feedback
 			messages = append(messages, resp)
 			messages = append(messages, &schema.Message{
 				Role:    schema.User,
@@ -194,7 +224,7 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 		var regularToolCalls []schema.ToolCall
 		for i := range resp.ToolCalls {
 			tc := &resp.ToolCalls[i]
-			if output.IsOutputToolName(tc.Function.Name) {
+			if isOutputToolCall(tc.Function.Name, outputToolNames) {
 				outputToolCall = tc
 			} else {
 				regularToolCalls = append(regularToolCalls, *tc)
@@ -205,7 +235,12 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 			// Output tool called — parse and validate
 			messages = append(messages, resp)
 
-			parsedOutput, err := output.ParseStructuredOutput[O]([]byte(outputToolCall.Function.Arguments))
+			var parsedOutput O
+			if a.outputParser != nil {
+				parsedOutput, err = a.outputParser(outputToolCall.Function.Name, []byte(outputToolCall.Function.Arguments))
+			} else {
+				parsedOutput, err = output.ParseStructuredOutput[O]([]byte(outputToolCall.Function.Arguments))
+			}
 			if err != nil {
 				// Parse error — retry
 				resultRetries++
@@ -338,53 +373,65 @@ func (a *Agent[D, O]) buildSystemMessages(rc *RunContext[D]) ([]*schema.Message,
 	return msgs, nil
 }
 
-// prepareTools collects user tools and output tools, and builds a tool lookup map.
-func (a *Agent[D, O]) prepareTools(ctx context.Context, rc *RunContext[D]) (
-	userTools []tool.InvokableTool,
-	outputTools []tool.InvokableTool,
-	toolMap map[string]tool.InvokableTool,
-	err error,
+// buildToolInfos builds tool info list per-iteration, running prepare callbacks each time.
+// Returns the combined tool infos and a set of output tool names.
+func (a *Agent[D, O]) buildToolInfos(ctx context.Context, rc *RunContext[D]) (
+	[]*schema.ToolInfo, map[string]bool, error,
 ) {
-	toolMap = make(map[string]tool.InvokableTool)
+	var allToolInfos []*schema.ToolInfo
+	outputToolNames := make(map[string]bool)
 
-	// Collect user tools (with prepare if configured)
+	// User tools (with prepare if configured)
 	for _, entry := range a.tools {
-		t := entry.tool
+		info, err := entry.tool.Info(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get tool info: %w", err)
+		}
+		// Apply prepare callback if present
 		if entry.prepare != nil {
-			info, infoErr := t.Info(ctx)
-			if infoErr != nil {
-				return nil, nil, nil, fmt.Errorf("get tool info for prepare: %w", infoErr)
-			}
 			modifiedInfo, prepErr := entry.prepare(rc, info)
 			if prepErr != nil {
-				return nil, nil, nil, fmt.Errorf("prepare tool: %w", prepErr)
+				return nil, nil, fmt.Errorf("prepare tool %q: %w", info.Name, prepErr)
 			}
-			// Wrap with modified info
-			t = &wrappedTool{
-				info:    modifiedInfo,
-				runFunc: func(c context.Context, args string) (string, error) { return entry.tool.InvokableRun(c, args) },
-			}
+			info = modifiedInfo
 		}
-		info, infoErr := t.Info(ctx)
-		if infoErr != nil {
-			return nil, nil, nil, fmt.Errorf("get tool info: %w", infoErr)
-		}
-		toolMap[info.Name] = t
-		userTools = append(userTools, t)
+		allToolInfos = append(allToolInfos, info)
 	}
 
-	// Generate output tools (if O is not string)
+	// Output tools (if O is not string)
 	if !output.IsString[O]() {
-		paramsOneOf, schemaErr := output.BuildParamsOneOf[O]()
-		if schemaErr != nil {
-			return nil, nil, nil, fmt.Errorf("build output schema: %w", schemaErr)
+		if len(a.outputTools) > 0 {
+			// Union type — use pre-built output tools
+			for _, entry := range a.outputTools {
+				info, err := entry.tool.Info(ctx)
+				if err != nil {
+					return nil, nil, fmt.Errorf("get union output tool info: %w", err)
+				}
+				allToolInfos = append(allToolInfos, info)
+				outputToolNames[entry.name] = true
+			}
+		} else {
+			// Standard single output tool
+			paramsOneOf, err := output.BuildParamsOneOf[O]()
+			if err != nil {
+				return nil, nil, fmt.Errorf("build output schema: %w", err)
+			}
+			outTool := output.GenerateOutputTool[O](paramsOneOf)
+			outInfo, err := outTool.Info(ctx)
+			if err != nil {
+				return nil, nil, fmt.Errorf("get output tool info: %w", err)
+			}
+			allToolInfos = append(allToolInfos, outInfo)
+			outputToolNames[outInfo.Name] = true
 		}
-		outTool := output.GenerateOutputTool[O](paramsOneOf)
-		outputTools = append(outputTools, outTool)
-		toolMap[output.DefaultOutputToolName] = outTool
 	}
 
-	return userTools, outputTools, toolMap, nil
+	return allToolInfos, outputToolNames, nil
+}
+
+// isOutputToolCall checks if a tool call name matches any output tool.
+func isOutputToolCall(name string, outputToolNames map[string]bool) bool {
+	return outputToolNames[name] || output.IsOutputToolName(name)
 }
 
 // executeToolCalls executes tool calls in parallel and returns tool result messages.
@@ -417,7 +464,7 @@ func (a *Agent[D, O]) executeToolCalls(
 				return
 			}
 
-			result, err := a.executeSingleTool(ctx, t, tc, toolRetries)
+			result, err := a.executeSingleTool(ctx, t, tc, toolRetries, &mu)
 			mu.Lock()
 			if err != nil {
 				errs = append(errs, err)
@@ -437,11 +484,13 @@ func (a *Agent[D, O]) executeToolCalls(
 }
 
 // executeSingleTool executes a single tool call with retry handling.
+// The mu mutex protects access to the shared toolRetries map.
 func (a *Agent[D, O]) executeSingleTool(
 	ctx context.Context,
 	t tool.InvokableTool,
 	tc schema.ToolCall,
 	toolRetries map[string]int,
+	mu *sync.Mutex,
 ) (*schema.Message, error) {
 	result, err := func() (res string, resErr error) {
 		defer func() {
@@ -454,9 +503,13 @@ func (a *Agent[D, O]) executeSingleTool(
 
 	if err != nil {
 		if retryErr, ok := IsModelRetry(err); ok {
-			// ModelRetry — consume per-tool retry count
+			// ModelRetry — consume per-tool retry count (under lock)
+			mu.Lock()
 			toolRetries[tc.Function.Name]++
-			if toolRetries[tc.Function.Name] > a.maxToolRetries {
+			count := toolRetries[tc.Function.Name]
+			mu.Unlock()
+
+			if count > a.maxToolRetries {
 				return nil, &ToolRetriesExceededError{
 					ToolName:   tc.Function.Name,
 					MaxRetries: a.maxToolRetries,
@@ -580,6 +633,16 @@ func usageFromTracker(tracker *UsageTracker) Usage {
 		ResponseTokens: tracker.ResponseTokens,
 		TotalTokens:    tracker.TotalTokens,
 	}
+}
+
+// IsModelRetry checks if an error is (or wraps) an ErrModelRetry.
+// Uses errors.As to support wrapped errors.
+func IsModelRetry(err error) (*ErrModelRetry, bool) {
+	var e *ErrModelRetry
+	if errors.As(err, &e) {
+		return e, true
+	}
+	return nil, false
 }
 
 // Helper type conversion functions.

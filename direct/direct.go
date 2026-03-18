@@ -128,12 +128,51 @@ func buildModelOpts(cfg *requestConfig, toolInfos []*schema.ToolInfo) []model.Op
 		opts = append(opts, model.WithTools(toolInfos))
 	}
 	if cfg.modelSettings != nil {
-		if v, ok := cfg.modelSettings["temperature"].(float64); ok {
-			opts = append(opts, model.WithTemperature(float32(v)))
+		if v, ok := cfg.modelSettings["temperature"]; ok {
+			if f, ok := toFloat32(v); ok {
+				opts = append(opts, model.WithTemperature(f))
+			}
 		}
-		if v, ok := cfg.modelSettings["max_tokens"].(int); ok {
-			opts = append(opts, model.WithMaxTokens(v))
+		if v, ok := cfg.modelSettings["max_tokens"]; ok {
+			if n, ok := toInt(v); ok {
+				opts = append(opts, model.WithMaxTokens(n))
+			}
+		}
+		if v, ok := cfg.modelSettings["top_p"]; ok {
+			if f, ok := toFloat32(v); ok {
+				opts = append(opts, model.WithTopP(f))
+			}
+		}
+		if v, ok := cfg.modelSettings["stop"]; ok {
+			if s, ok := v.([]string); ok {
+				opts = append(opts, model.WithStop(s))
+			}
 		}
 	}
 	return opts
+}
+
+// Type conversion helpers (consistent with agent package).
+func toFloat32(v any) (float32, bool) {
+	switch val := v.(type) {
+	case float32:
+		return val, true
+	case float64:
+		return float32(val), true
+	case int:
+		return float32(val), true
+	}
+	return 0, false
+}
+
+func toInt(v any) (int, bool) {
+	switch val := v.(type) {
+	case int:
+		return val, true
+	case int64:
+		return int(val), true
+	case float64:
+		return int(val), true
+	}
+	return 0, false
 }

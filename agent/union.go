@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"regexp"
 
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 
 	"github.com/codycode/cody-core-go/output"
@@ -130,6 +131,115 @@ func buildOneOf2OutputTools[A, B any]() ([]tool.InvokableTool, []unionToolInfo, 
 	}
 
 	return tools, infos, nil
+}
+
+// NewOneOf2 creates an Agent whose output is a OneOf2[A, B] union type.
+// The model chooses which variant to return by calling the corresponding output tool.
+func NewOneOf2[D, A, B any](chatModel model.BaseChatModel, opts ...Option[D, OneOf2[A, B]]) *Agent[D, OneOf2[A, B]] {
+	a := New[D, OneOf2[A, B]](chatModel, opts...)
+
+	tools, infos, err := buildOneOf2OutputTools[A, B]()
+	if err != nil {
+		a.initErrors = append(a.initErrors, fmt.Errorf("build union output tools: %w", err))
+		return a
+	}
+
+	a.outputTools = make([]outputToolEntry, len(tools))
+	for i, t := range tools {
+		a.outputTools[i] = outputToolEntry{tool: t, name: infos[i].toolName}
+	}
+
+	// Build name-to-index lookup
+	nameToIndex := make(map[string]int, len(infos))
+	for _, info := range infos {
+		nameToIndex[info.toolName] = info.typeIndex
+	}
+
+	a.outputParser = func(toolName string, argsJSON []byte) (OneOf2[A, B], error) {
+		idx, ok := nameToIndex[toolName]
+		if !ok {
+			var zero OneOf2[A, B]
+			return zero, fmt.Errorf("unknown union output tool %q", toolName)
+		}
+		switch idx {
+		case 0:
+			v, err := output.ParseStructuredOutput[A](argsJSON)
+			if err != nil {
+				var zero OneOf2[A, B]
+				return zero, err
+			}
+			return NewOneOf2A[A, B](v), nil
+		case 1:
+			v, err := output.ParseStructuredOutput[B](argsJSON)
+			if err != nil {
+				var zero OneOf2[A, B]
+				return zero, err
+			}
+			return NewOneOf2B[A, B](v), nil
+		default:
+			var zero OneOf2[A, B]
+			return zero, fmt.Errorf("invalid type index %d for OneOf2", idx)
+		}
+	}
+
+	return a
+}
+
+// NewOneOf3 creates an Agent whose output is a OneOf3[A, B, C] union type.
+func NewOneOf3[D, A, B, C any](chatModel model.BaseChatModel, opts ...Option[D, OneOf3[A, B, C]]) *Agent[D, OneOf3[A, B, C]] {
+	a := New[D, OneOf3[A, B, C]](chatModel, opts...)
+
+	tools, infos, err := buildOneOf3OutputTools[A, B, C]()
+	if err != nil {
+		a.initErrors = append(a.initErrors, fmt.Errorf("build union output tools: %w", err))
+		return a
+	}
+
+	a.outputTools = make([]outputToolEntry, len(tools))
+	for i, t := range tools {
+		a.outputTools[i] = outputToolEntry{tool: t, name: infos[i].toolName}
+	}
+
+	nameToIndex := make(map[string]int, len(infos))
+	for _, info := range infos {
+		nameToIndex[info.toolName] = info.typeIndex
+	}
+
+	a.outputParser = func(toolName string, argsJSON []byte) (OneOf3[A, B, C], error) {
+		idx, ok := nameToIndex[toolName]
+		if !ok {
+			var zero OneOf3[A, B, C]
+			return zero, fmt.Errorf("unknown union output tool %q", toolName)
+		}
+		switch idx {
+		case 0:
+			v, err := output.ParseStructuredOutput[A](argsJSON)
+			if err != nil {
+				var zero OneOf3[A, B, C]
+				return zero, err
+			}
+			return NewOneOf3A[A, B, C](v), nil
+		case 1:
+			v, err := output.ParseStructuredOutput[B](argsJSON)
+			if err != nil {
+				var zero OneOf3[A, B, C]
+				return zero, err
+			}
+			return NewOneOf3B[A, B, C](v), nil
+		case 2:
+			v, err := output.ParseStructuredOutput[C](argsJSON)
+			if err != nil {
+				var zero OneOf3[A, B, C]
+				return zero, err
+			}
+			return NewOneOf3C[A, B, C](v), nil
+		default:
+			var zero OneOf3[A, B, C]
+			return zero, fmt.Errorf("invalid type index %d for OneOf3", idx)
+		}
+	}
+
+	return a
 }
 
 // buildOneOf3OutputTools generates output tools for a OneOf3 union type.

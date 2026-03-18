@@ -16,6 +16,8 @@ type RunContext[D any] struct {
 	Deps D
 	// Usage tracks token usage across the run.
 	Usage *UsageTracker
+	// Metadata holds additional run-level metadata.
+	Metadata map[string]any
 	// Retry is the current result retry count.
 	Retry int
 }
