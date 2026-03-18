@@ -260,9 +260,9 @@ conv.SetMessages(saved) // restore a saved conversation state
 conv.Reset()         // clear history
 ```
 
-### Streaming (Experimental)
+### Streaming
 
-`RunStream` provides a streaming interface. The current implementation wraps `Run()` — true token-by-token streaming is planned.
+`RunStream` provides true token-by-token streaming using `chatModel.Stream()`. Text chunks are forwarded to `TextStream()` in real-time as they arrive from the model.
 
 ```go
 sr, _ := a.RunStream(ctx, "Tell me a story", agent.NoDeps{})

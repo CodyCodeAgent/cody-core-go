@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `RunStream` now provides true token-by-token streaming using `chatModel.Stream()` instead of wrapping `Run()` in a goroutine
+- `StreamResult` no longer marked as EXPERIMENTAL
+
+### Added
+
+- `testutil.ChunkingModel` for testing multi-chunk streaming behavior
+
 ## [v0.2.0] - 2026-03-18
 
 ### Changed

@@ -42,10 +42,8 @@ type conversationRef struct {
 }
 
 // StreamResult provides streaming access to an agent's output.
-//
-// EXPERIMENTAL: The current implementation wraps Run() in a goroutine and does NOT
-// provide true token-by-token streaming. The full response is sent as a single chunk
-// after the agent loop completes. True streaming is planned for a future release.
+// Text chunks are forwarded in real-time via TextStream() as they arrive from the model.
+// Call Final() to wait for the agent loop to complete and get the typed result.
 type StreamResult[O any] struct {
 	stream      *schema.StreamReader[*schema.Message]
 	textCh      chan string

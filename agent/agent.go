@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -321,31 +322,345 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 	return nil, fmt.Errorf("agent loop exceeded max iterations (%d)", a.maxIterations)
 }
 
-// RunStream executes the agent with streaming output.
-//
-// EXPERIMENTAL: The current implementation wraps Run() in a goroutine and does NOT
-// provide true token-by-token streaming — the full response is sent as a single chunk
-// after the agent loop completes. True streaming (using chatModel.Stream) is planned
-// for a future release.
+// RunStream executes the agent with true token-by-token streaming.
+// Text chunks are forwarded to TextStream() in real-time as they arrive from the model.
+// Tool calls are accumulated from streamed chunks and executed synchronously between iterations.
 func (a *Agent[D, O]) RunStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult[O], error) {
 	if len(a.initErrors) > 0 {
 		return nil, fmt.Errorf("agent initialization errors: %v", a.initErrors)
 	}
 
+	cfg := &runConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	// Create RunContext
+	tracker := &UsageTracker{}
+	rc := &RunContext[D]{
+		Ctx:      ctx,
+		Deps:     deps,
+		Usage:    tracker,
+		Metadata: cfg.metadata,
+	}
+	ctx = withRunContext[D](ctx, rc)
+
+	// Build system messages
+	systemMsgs, err := a.buildSystemMessages(rc)
+	if err != nil {
+		return nil, fmt.Errorf("build system messages: %w", err)
+	}
+
+	// Build messages
+	messages := make([]*schema.Message, 0, len(systemMsgs)+len(cfg.history)+1)
+	messages = append(messages, systemMsgs...)
+	if len(cfg.history) > 0 {
+		messages = append(messages, cfg.history...)
+	}
+	messages = append(messages, &schema.Message{
+		Role:    schema.User,
+		Content: prompt,
+	})
+
+	// Build tool map
+	toolMap := make(map[string]tool.InvokableTool)
+	for _, entry := range a.tools {
+		info, infoErr := entry.tool.Info(ctx)
+		if infoErr != nil {
+			return nil, fmt.Errorf("get tool info: %w", infoErr)
+		}
+		toolMap[info.Name] = entry.tool
+	}
+
+	toolRetries := make(map[string]int)
+	resultRetries := 0
+	newMessageStart := len(cfg.history)
+	systemCount := len(systemMsgs)
+
 	sr := &StreamResult[O]{}
 
 	sr.agentLoop = func() {
-		result, err := a.Run(ctx, prompt, deps, opts...)
-		sr.finalResult = result
-		sr.finalErr = err
-		if result != nil && output.IsString[O]() {
-			if v, ok := any(&result.Output).(*string); ok && sr.textCh != nil {
-				sr.textCh <- *v
+		for iteration := 0; iteration < a.maxIterations; iteration++ {
+			if err := checkUsageLimits(tracker, cfg.usageLimits); err != nil {
+				sr.finalErr = err
+				return
+			}
+
+			allToolInfos, outputToolNames, err := a.buildToolInfos(ctx, rc)
+			if err != nil {
+				sr.finalErr = fmt.Errorf("build tool infos: %w", err)
+				return
+			}
+
+			modelOpts := a.buildModelOptions(cfg, allToolInfos)
+
+			// Use Stream instead of Generate for real token-by-token streaming
+			streamReader, err := a.chatModel.Stream(ctx, messages, modelOpts...)
+			if err != nil {
+				sr.finalErr = fmt.Errorf("model stream: %w", err)
+				return
+			}
+
+			// Accumulate the full response from stream chunks
+			resp, err := a.consumeStream(streamReader, sr.textCh, output.IsString[O]())
+			streamReader.Close()
+			if err != nil {
+				sr.finalErr = fmt.Errorf("consume stream: %w", err)
+				return
+			}
+
+			// Track usage
+			if resp.ResponseMeta != nil && resp.ResponseMeta.Usage != nil {
+				u := resp.ResponseMeta.Usage
+				tracker.AddTokens(u.PromptTokens, u.CompletionTokens, u.TotalTokens)
+			}
+
+			// From here, same logic as Run()
+			hasToolCalls := len(resp.ToolCalls) > 0
+
+			if !hasToolCalls {
+				if output.IsString[O]() {
+					var result O
+					if v, ok := any(&result).(*string); ok {
+						*v = resp.Content
+					}
+					messages = append(messages, resp)
+					nonSystemMsgs := extractNonSystemMessages(messages, systemCount)
+					sr.finalResult = &Result[O]{
+						Output:          result,
+						Usage:           usageFromTracker(tracker),
+						allMessages:     nonSystemMsgs,
+						newMessageStart: newMessageStart,
+					}
+					return
+				}
+
+				if resp.Content != "" {
+					trimmed := strings.TrimSpace(resp.Content)
+					if trimmed != "" {
+						parsedOutput, parseErr := output.ParseStructuredOutput[O]([]byte(trimmed))
+						if parseErr == nil {
+							validatedOutput, valErr := output.RunValidators(ctx, parsedOutput, a.outputValidators)
+							if valErr == nil {
+								messages = append(messages, resp)
+								nonSystemMsgs := extractNonSystemMessages(messages, systemCount)
+								sr.finalResult = &Result[O]{
+									Output:          validatedOutput,
+									Usage:           usageFromTracker(tracker),
+									allMessages:     nonSystemMsgs,
+									newMessageStart: newMessageStart,
+								}
+								return
+							}
+						}
+					}
+				}
+
+				resultRetries++
+				if resultRetries > a.maxResultRetries {
+					sr.finalErr = &ResultRetriesExceededError{
+						MaxRetries: a.maxResultRetries,
+						LastError:  fmt.Errorf("model returned plain text but structured output expected"),
+					}
+					return
+				}
+				messages = append(messages, resp)
+				messages = append(messages, &schema.Message{
+					Role:    schema.User,
+					Content: "Please use the provided tool to return your response in the required structured format.",
+				})
+				continue
+			}
+
+			// Has tool calls — check for output tool first
+			var outputToolCall *schema.ToolCall
+			var regularToolCalls []schema.ToolCall
+			for i := range resp.ToolCalls {
+				tc := &resp.ToolCalls[i]
+				if isOutputToolCall(tc.Function.Name, outputToolNames) {
+					outputToolCall = tc
+				} else {
+					regularToolCalls = append(regularToolCalls, *tc)
+				}
+			}
+
+			if outputToolCall != nil {
+				messages = append(messages, resp)
+
+				var parsedOutput O
+				if a.outputParser != nil {
+					parsedOutput, err = a.outputParser(outputToolCall.Function.Name, []byte(outputToolCall.Function.Arguments))
+				} else {
+					parsedOutput, err = output.ParseStructuredOutput[O]([]byte(outputToolCall.Function.Arguments))
+				}
+				if err != nil {
+					resultRetries++
+					if resultRetries > a.maxResultRetries {
+						sr.finalErr = &ResultRetriesExceededError{
+							MaxRetries: a.maxResultRetries,
+							LastError:  err,
+						}
+						return
+					}
+					messages = append(messages, &schema.Message{
+						Role:       schema.Tool,
+						Content:    fmt.Sprintf("Error parsing output: %s", err.Error()),
+						ToolCallID: outputToolCall.ID,
+					})
+					continue
+				}
+
+				validatedOutput, valErr := output.RunValidators(ctx, parsedOutput, a.outputValidators)
+				if valErr != nil {
+					if retryErr, ok := IsModelRetry(valErr); ok {
+						resultRetries++
+						if resultRetries > a.maxResultRetries {
+							sr.finalErr = &ResultRetriesExceededError{
+								MaxRetries: a.maxResultRetries,
+								LastError:  valErr,
+							}
+							return
+						}
+						messages = append(messages, &schema.Message{
+							Role:       schema.Tool,
+							Content:    retryErr.Message,
+							ToolCallID: outputToolCall.ID,
+						})
+						continue
+					}
+					sr.finalErr = fmt.Errorf("output validation: %w", valErr)
+					return
+				}
+
+				for _, tc := range regularToolCalls {
+					messages = append(messages, &schema.Message{
+						Role:       schema.Tool,
+						Content:    "Tool not executed - a final result was already provided.",
+						ToolCallID: tc.ID,
+					})
+				}
+
+				nonSystemMsgs := extractNonSystemMessages(messages, systemCount)
+				sr.finalResult = &Result[O]{
+					Output:          validatedOutput,
+					Usage:           usageFromTracker(tracker),
+					allMessages:     nonSystemMsgs,
+					newMessageStart: newMessageStart,
+				}
+				return
+			}
+
+			// Only regular tool calls
+			messages = append(messages, resp)
+			toolResults, err := a.executeToolCalls(ctx, regularToolCalls, toolMap, toolRetries)
+			if err != nil {
+				sr.finalErr = err
+				return
+			}
+			messages = append(messages, toolResults...)
+		}
+
+		sr.finalErr = fmt.Errorf("agent loop exceeded max iterations (%d)", a.maxIterations)
+	}
+
+	return sr, nil
+}
+
+// consumeStream reads all chunks from a StreamReader, accumulates them into a single
+// message, and forwards text content to textCh in real-time for streaming output.
+func (a *Agent[D, O]) consumeStream(
+	reader *schema.StreamReader[*schema.Message],
+	textCh chan<- string,
+	isStringOutput bool,
+) (*schema.Message, error) {
+	accumulated := &schema.Message{
+		Role: schema.Assistant,
+	}
+	var toolCallArgs map[int]*strings.Builder // index -> accumulated arguments
+
+	for {
+		chunk, err := reader.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+
+		// Accumulate text content
+		if chunk.Content != "" {
+			accumulated.Content += chunk.Content
+			// Forward text chunks in real-time for string output
+			if isStringOutput && textCh != nil {
+				textCh <- chunk.Content
+			}
+		}
+
+		// Accumulate tool calls
+		for i := range chunk.ToolCalls {
+			tc := &chunk.ToolCalls[i]
+			// Find or create the tool call entry in accumulated
+			idx := findOrCreateToolCall(accumulated, tc)
+			if tc.Function.Arguments != "" {
+				if toolCallArgs == nil {
+					toolCallArgs = make(map[int]*strings.Builder)
+				}
+				if _, ok := toolCallArgs[idx]; !ok {
+					toolCallArgs[idx] = &strings.Builder{}
+					// Include any arguments already set
+					toolCallArgs[idx].WriteString(accumulated.ToolCalls[idx].Function.Arguments)
+				}
+				toolCallArgs[idx].WriteString(tc.Function.Arguments)
+			}
+		}
+
+		// Accumulate usage from the last chunk
+		if chunk.ResponseMeta != nil {
+			accumulated.ResponseMeta = chunk.ResponseMeta
+		}
+	}
+
+	// Finalize accumulated tool call arguments
+	for idx, builder := range toolCallArgs {
+		accumulated.ToolCalls[idx].Function.Arguments = builder.String()
+	}
+
+	return accumulated, nil
+}
+
+// findOrCreateToolCall finds an existing tool call by ID in the accumulated message,
+// or appends a new entry. Returns the index.
+func findOrCreateToolCall(msg *schema.Message, tc *schema.ToolCall) int {
+	// Match by ID if present
+	if tc.ID != "" {
+		for i := range msg.ToolCalls {
+			if msg.ToolCalls[i].ID == tc.ID {
+				return i
 			}
 		}
 	}
 
-	return sr, nil
+	// Match by index position (some providers stream by index without ID on subsequent chunks)
+	// If no ID and we have a function name, this is a new tool call
+	if tc.Function.Name != "" || tc.ID != "" {
+		msg.ToolCalls = append(msg.ToolCalls, schema.ToolCall{
+			ID:   tc.ID,
+			Type: tc.Type,
+			Function: schema.FunctionCall{
+				Name: tc.Function.Name,
+			},
+		})
+		return len(msg.ToolCalls) - 1
+	}
+
+	// Fallback: append to the last tool call (streaming argument continuation)
+	if len(msg.ToolCalls) > 0 {
+		return len(msg.ToolCalls) - 1
+	}
+
+	// No existing tool call, create one
+	msg.ToolCalls = append(msg.ToolCalls, schema.ToolCall{})
+	return 0
 }
 
 // RunWithHistory is a convenience method that runs with message history.

@@ -144,6 +144,29 @@ func TestRunStream_WithToolCalls(t *testing.T) {
 	assert.Equal(t, "Hello from tool!", result.Output)
 }
 
+func TestRunStream_MultiChunkStreaming(t *testing.T) {
+	// Use a model that sends text in multiple chunks to verify real streaming
+	cm := testutil.NewChunkingModel([]string{"Hello", ", ", "world", "!"})
+
+	a := New[NoDeps, string](cm)
+
+	sr, err := a.RunStream(context.Background(), "Hi!", NoDeps{})
+	require.NoError(t, err)
+
+	// Collect individual chunks — should arrive separately, not as one blob
+	var chunks []string
+	for chunk := range sr.TextStream() {
+		chunks = append(chunks, chunk)
+	}
+
+	// Each chunk should have been forwarded individually
+	assert.Equal(t, []string{"Hello", ", ", "world", "!"}, chunks)
+
+	result, err := sr.Final()
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, world!", result.Output)
+}
+
 func TestRunStream_Close(t *testing.T) {
 	// Close should not panic even without a real stream
 	sr := &StreamResult[string]{}
