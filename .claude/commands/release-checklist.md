@@ -87,7 +87,26 @@ The user has just added a feature or fixed a bug. Your job is to walk through **
 3. If the change spans multiple categories, use the primary one and mention others in the body.
 4. Ask the user to confirm the commit message before committing.
 
-## Step 10: Final Report
+## Step 10: Tag & Release (Optional)
+
+After the commit, ask the user: **"Do you want to tag a release version?"**
+
+- If the user says **no** (or skip), mark this step SKIPPED and proceed to the final report.
+- If the user says **yes**, follow these steps:
+
+1. Check the latest existing tag: `git describe --tags --abbrev=0 2>/dev/null || echo "no tags yet"`
+2. Based on the change type and semver rules, suggest the next version:
+   - **PATCH** bump (e.g., v0.1.0 → v0.1.1): bug fixes only, no API changes
+   - **MINOR** bump (e.g., v0.1.1 → v0.2.0): new features, backward-compatible API additions
+   - **MAJOR** bump (e.g., v0.2.0 → v1.0.0): breaking API changes (rare — only when API is stable)
+   - If no tags exist yet, suggest **v0.1.0** as the initial release
+3. Ask the user to confirm the version number.
+4. Update `CHANGELOG.md`: rename `## [Unreleased]` to `## [vX.Y.Z] - YYYY-MM-DD` and add a fresh empty `## [Unreleased]` section above it.
+5. Commit the CHANGELOG update: `git commit -m "chore: release vX.Y.Z"`
+6. Create the tag: `git tag vX.Y.Z`
+7. Tell the user: "Run `git push && git push --tags` to publish. This will trigger the release workflow to create a GitHub Release."
+
+## Step 11: Final Report
 
 Present a summary table:
 
@@ -106,8 +125,9 @@ Present a summary table:
 | make check          | ...    | ...                          |
 | go mod tidy         | ...    | ...                          |
 | Commit              | ...    | ...                          |
+| Tag & Release       | ...    | ...                          |
 ```
 
 Status values: DONE, SKIPPED (with reason), FAILED (with action needed).
 
-If everything passed, tell the user: "Ready to push. Run `git push` or I can create a PR for you."
+If everything passed, tell the user: "Ready to push. Run `git push` (and `git push --tags` if tagged) or I can help create a PR."
