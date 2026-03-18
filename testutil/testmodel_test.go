@@ -117,7 +117,7 @@ func TestTestModel_AllCalls(t *testing.T) {
 	msgs := []*schema.Message{{Role: schema.User, Content: "hello"}}
 	tools := []*schema.ToolInfo{{Name: "my_tool", Desc: "desc"}}
 
-	tm.Generate(context.Background(), msgs, model.WithTools(tools))
+	_, _ = tm.Generate(context.Background(), msgs, model.WithTools(tools))
 
 	calls := tm.AllCalls()
 	require.Len(t, calls, 1)
@@ -131,8 +131,8 @@ func TestTestModel_LastCall(t *testing.T) {
 		TestResponse{Text: "b"},
 	)
 
-	tm.Generate(context.Background(), []*schema.Message{{Content: "first"}})
-	tm.Generate(context.Background(), []*schema.Message{{Content: "second"}})
+	_, _ = tm.Generate(context.Background(), []*schema.Message{{Content: "first"}})
+	_, _ = tm.Generate(context.Background(), []*schema.Message{{Content: "second"}})
 
 	last := tm.LastCall()
 	assert.Equal(t, "second", last.Messages[0].Content)
@@ -141,7 +141,7 @@ func TestTestModel_LastCall(t *testing.T) {
 func TestTestModel_Reset(t *testing.T) {
 	tm := NewTestModel(TestResponse{Text: "hello"})
 
-	tm.Generate(context.Background(), nil)
+	_, _ = tm.Generate(context.Background(), nil)
 	assert.Equal(t, 1, tm.CallCount())
 
 	tm.Reset()
