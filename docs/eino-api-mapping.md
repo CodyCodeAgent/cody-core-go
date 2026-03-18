@@ -323,31 +323,28 @@ agent.WithTool[D, O](userEinoTool)
 
 **场景 2：WithToolFunc 创建带依赖注入的 Tool**
 ```go
-// 使用 utils.NewTool 或自定义 InvokableTool 实现
-// 1. 用 utils.GoStruct2ToolInfo[Args]("name", "desc") 生成 schema
-// 2. 包装 fn，从 ctx 提取 RunContext[D]
-// 3. 返回 InvokableTool
+// 使用自定义 wrappedTool 实现
+// 1. 用 output.BuildParamsOneOf[Args]() 生成参数 schema
+// 2. 构建 wrappedTool，包装 fn：从 ctx 提取 RunContext[D]，json.Unmarshal 参数
+// 3. 返回 tool.InvokableTool
 ```
 
 **场景 3：Output Tool 生成**
 ```go
-// 使用已导出的 GoStruct2ParamsOneOf[O]() 直接生成 schema
-paramsOneOf, err := utils.GoStruct2ParamsOneOf[O]()
-toolInfo := &schema.ToolInfo{
-    Name:       "final_result",
-    Desc:       "Return the final structured result",
-    ParamsOneOf: paramsOneOf,
-}
+// 使用自定义 BuildParamsOneOf[O]() 生成 schema
+paramsOneOf, err := output.BuildParamsOneOf[O]()
+outTool := output.GenerateOutputTool[O](paramsOneOf)
+// outTool 实现 tool.InvokableTool，名为 "final_result"
 ```
 
 ### 4.5 关键风险点（已更新）
 
 | 风险 | 说明 | 应对 |
 |------|------|------|
-| ~~InferTool schema 推断能力~~ | ✅ 已验证：使用 `jsonschema` tag，支持 required/description/enum | 直接复用 `GoStruct2ParamsOneOf` |
+| ~~InferTool schema 推断能力~~ | ✅ 已验证：Eino 使用 `jsonschema` tag | 最终采用自定义 `output.BuildParamsOneOf`，同时支持 `description`/`jsonschema` tag |
 | **InvokableRun 参数格式** | 参数以 `argumentsInJSON string` 传入，是原始 JSON 字符串 | 我们需要在 wrapper 里 `json.Unmarshal` 到 Args struct |
 | **Tool result 格式** | 标准 InvokableRun 返回 `string`；InferTool 包装后自动序列化 D→string | 用 InferTool/NewTool 可返回任意类型 D |
-| **jsonschema tag 兼容性** | 用户可能习惯 `description` tag 而非 `jsonschema` tag | 文档明确说明用 `jsonschema` tag |
+| **jsonschema tag 兼容性** | 用户可能习惯 `description` tag 而非 `jsonschema` tag | 自定义实现同时支持两种 tag |
 
 ---
 
@@ -673,27 +670,26 @@ type BaseChatModelAgentMiddleware struct{}
 | 原始类型支持 | ✅ | `ParameterInfo.Type` 支持 DataType（各种基本类型） |
 | 数组/切片支持 | ✅ | `ParameterInfo.ElemInfo` 支持数组元素类型递归定义 |
 
-### 8.2 策略决定
+### 8.2 策略决定（实现更新）
 
-**直接复用 `utils.GoStruct2ParamsOneOf[T]()`**，不需要自己实现 `SchemaFor[T]`。
+**最终采用自定义 `output.BuildParamsOneOf[T]()` 实现**，没有直接复用 Eino 的 `utils.GoStruct2ParamsOneOf[T]()`。原因是需要同时支持 `description` tag 和 `jsonschema` tag，以及 `enum`、`required` 等自定义 tag。
 
 ```go
-// 生成 output tool schema
-paramsOneOf, err := utils.GoStruct2ParamsOneOf[O]()
+// 生成 output tool schema（使用自定义实现）
+paramsOneOf, err := output.BuildParamsOneOf[O]()
 if err != nil {
-    return fmt.Errorf("generate schema for output type: %w", err)
+    return fmt.Errorf("build output schema: %w", err)
 }
 
-outputToolInfo := &schema.ToolInfo{
-    Name:        "final_result",
-    Desc:        "Return the final structured result",
-    ParamsOneOf: paramsOneOf,
-}
+outTool := output.GenerateOutputTool[O](paramsOneOf)
 ```
 
-**注意事项**：
-- 用户的 struct 必须使用 `jsonschema` tag（不是 `description` tag）
-- 示例：`Field string \`json:"field" jsonschema:"required,description=field description"\``
+**支持的 struct tag**：
+- `json:"field_name,omitempty"` — JSON 字段名，omitempty 标记为非 required
+- `description:"字段描述"` — 字段描述
+- `required:"true"` — 强制标记为 required
+- `enum:"a,b,c"` — 枚举值
+- `jsonschema:"required,description=xxx,enum=a,enum=b"` — Eino 风格 jsonschema tag（也支持）
 
 ---
 
