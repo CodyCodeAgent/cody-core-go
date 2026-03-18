@@ -40,4 +40,6 @@ This is a **Pydantic AI-style agent framework for Go** built on [cloudwego/eino]
 
 **Tool Registration**: Either wrap an existing `eino.InvokableTool` with `WithTool`, or create inline tools with `WithToolFunc[D, O, Args]` which auto-generates schema from the `Args` struct and injects `RunContext`.
 
+**Model Settings**: Use the strongly-typed `ModelSettings` struct with pointer fields for optional values: `WithModelSettings(ModelSettings{Temperature: Ptr(float32(0.7)), MaxTokens: Ptr(100)})`.
+
 **Testing Pattern**: Create a `testutil.NewTestModel(responses...)` with pre-configured responses, pass it to `agent.New(...)`, call `agent.Run()`, then assert with `tm.CallCount()`, `tm.LastCall()`, and the `testutil.Assert*` helpers.

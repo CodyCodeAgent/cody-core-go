@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 )
 
 // NoDeps is a placeholder type for agents that don't need dependency injection.
@@ -23,19 +24,58 @@ type RunContext[D any] struct {
 }
 
 // UsageTracker accumulates token usage across multiple model calls in a single run.
+// All methods are safe for concurrent use.
 type UsageTracker struct {
-	Requests        int
-	RequestTokens   int
-	ResponseTokens  int
-	TotalTokens     int
+	mu             sync.Mutex
+	requests       int
+	requestTokens  int
+	responseTokens int
+	totalTokens    int
 }
 
 // AddTokens records token usage from a single model call.
 func (u *UsageTracker) AddTokens(request, response, total int) {
-	u.Requests++
-	u.RequestTokens += request
-	u.ResponseTokens += response
-	u.TotalTokens += total
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.requests++
+	u.requestTokens += request
+	u.responseTokens += response
+	u.totalTokens += total
+}
+
+// Snapshot returns a consistent snapshot of current usage values.
+func (u *UsageTracker) Snapshot() (requests, requestTokens, responseTokens, totalTokens int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.requests, u.requestTokens, u.responseTokens, u.totalTokens
+}
+
+// Requests returns the current number of model calls.
+func (u *UsageTracker) Requests() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.requests
+}
+
+// RequestTokens returns the total prompt tokens used.
+func (u *UsageTracker) RequestTokens() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.requestTokens
+}
+
+// ResponseTokens returns the total completion tokens used.
+func (u *UsageTracker) ResponseTokens() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.responseTokens
+}
+
+// TotalTokens returns the total tokens used.
+func (u *UsageTracker) TotalTokens() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.totalTokens
 }
 
 // Usage represents the final token usage summary for a run.

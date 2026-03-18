@@ -1,10 +1,10 @@
 package testutil
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/stretchr/testify/assert"
 )
 
 // AssertToolCalled checks that a tool with the given name was called in the model's recorded calls.
@@ -43,7 +43,7 @@ func AssertSystemPromptContains(t *testing.T, tm *TestModel, substr string) {
 	t.Helper()
 	for _, call := range tm.AllCalls() {
 		for _, msg := range call.Messages {
-			if msg.Role == schema.System && assert.ObjectsAreEqual(true, containsString(msg.Content, substr)) {
+			if msg.Role == schema.System && strings.Contains(msg.Content, substr) {
 				return
 			}
 		}
@@ -75,18 +75,4 @@ func AssertUserPromptSent(t *testing.T, tm *TestModel, content string) {
 		}
 	}
 	t.Errorf("expected user prompt %q to be sent, but it was not", content)
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && searchString(s, substr)))
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

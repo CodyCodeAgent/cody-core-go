@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,15 +27,14 @@ type Agent[D any, O any] struct {
 	systemPrompts    []SystemPromptFunc[D]
 	staticPrompts    []string
 	tools            []toolEntry[D]
-	outputMode       output.Mode
 	outputValidators []output.ValidatorFunc[O]
 	maxToolRetries   int
 	maxResultRetries int
 	maxIterations    int
-	modelSettings    map[string]any
+	modelSettings    *ModelSettings
 	initErrors       []error
 
-	// outputTools overrides the default single output tool (used for union types).
+	// outputTools holds pre-built output tools (populated in New() or union constructors).
 	outputTools []outputToolEntry
 	// outputParser overrides the default ParseStructuredOutput[O] (used for union types).
 	outputParser func(toolName string, argsJSON []byte) (O, error)
@@ -59,6 +57,19 @@ func New[D any, O any](chatModel model.BaseChatModel, opts ...Option[D, O]) *Age
 	for _, opt := range opts {
 		opt(a)
 	}
+
+	// Pre-build output tool for non-string types.
+	// For union types, NewOneOf2/NewOneOf3 will override outputTools after New() returns.
+	if !output.IsString[O]() && len(a.outputTools) == 0 {
+		paramsOneOf, err := output.BuildParamsOneOf[O]()
+		if err != nil {
+			a.initErrors = append(a.initErrors, fmt.Errorf("build output schema: %w", err))
+		} else {
+			outTool := output.GenerateOutputTool[O](paramsOneOf)
+			a.outputTools = []outputToolEntry{{tool: outTool, name: output.DefaultOutputToolName}}
+		}
+	}
+
 	return a
 }
 
@@ -311,6 +322,11 @@ func (a *Agent[D, O]) Run(ctx context.Context, prompt string, deps D, opts ...Ru
 }
 
 // RunStream executes the agent with streaming output.
+//
+// NOTE: The current implementation is a placeholder that wraps Run() in a goroutine.
+// It does NOT provide true token-by-token streaming — the full response is sent as a
+// single chunk after the agent loop completes. True streaming (using chatModel.Stream)
+// is planned for a future release.
 func (a *Agent[D, O]) RunStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult[O], error) {
 	if len(a.initErrors) > 0 {
 		return nil, fmt.Errorf("agent initialization errors: %v", a.initErrors)
@@ -398,31 +414,15 @@ func (a *Agent[D, O]) buildToolInfos(ctx context.Context, rc *RunContext[D]) (
 		allToolInfos = append(allToolInfos, info)
 	}
 
-	// Output tools (if O is not string)
+	// Output tools (pre-built in New() or union constructors)
 	if !output.IsString[O]() {
-		if len(a.outputTools) > 0 {
-			// Union type — use pre-built output tools
-			for _, entry := range a.outputTools {
-				info, err := entry.tool.Info(ctx)
-				if err != nil {
-					return nil, nil, fmt.Errorf("get union output tool info: %w", err)
-				}
-				allToolInfos = append(allToolInfos, info)
-				outputToolNames[entry.name] = true
-			}
-		} else {
-			// Standard single output tool
-			paramsOneOf, err := output.BuildParamsOneOf[O]()
-			if err != nil {
-				return nil, nil, fmt.Errorf("build output schema: %w", err)
-			}
-			outTool := output.GenerateOutputTool[O](paramsOneOf)
-			outInfo, err := outTool.Info(ctx)
+		for _, entry := range a.outputTools {
+			info, err := entry.tool.Info(ctx)
 			if err != nil {
 				return nil, nil, fmt.Errorf("get output tool info: %w", err)
 			}
-			allToolInfos = append(allToolInfos, outInfo)
-			outputToolNames[outInfo.Name] = true
+			allToolInfos = append(allToolInfos, info)
+			outputToolNames[entry.name] = true
 		}
 	}
 
@@ -477,7 +477,7 @@ func (a *Agent[D, O]) executeToolCalls(
 	wg.Wait()
 
 	if len(errs) > 0 {
-		return nil, errs[0]
+		return nil, errors.Join(errs...)
 	}
 
 	return results, nil
@@ -549,42 +549,8 @@ func (a *Agent[D, O]) buildModelOptions(cfg *runConfig, toolInfos []*schema.Tool
 		opts = append(opts, model.WithTools(toolInfos))
 	}
 
-	// Apply agent-level settings
-	settings := a.modelSettings
-	if cfg.modelSettings != nil {
-		// Run-level settings override agent-level
-		merged := make(map[string]any)
-		for k, v := range a.modelSettings {
-			merged[k] = v
-		}
-		for k, v := range cfg.modelSettings {
-			merged[k] = v
-		}
-		settings = merged
-	}
-
-	if settings != nil {
-		if v, ok := settings["temperature"]; ok {
-			if f, ok := toFloat32(v); ok {
-				opts = append(opts, model.WithTemperature(f))
-			}
-		}
-		if v, ok := settings["max_tokens"]; ok {
-			if n, ok := toInt(v); ok {
-				opts = append(opts, model.WithMaxTokens(n))
-			}
-		}
-		if v, ok := settings["top_p"]; ok {
-			if f, ok := toFloat32(v); ok {
-				opts = append(opts, model.WithTopP(f))
-			}
-		}
-		if v, ok := settings["stop"]; ok {
-			if s, ok := v.([]string); ok {
-				opts = append(opts, model.WithStop(s))
-			}
-		}
-	}
+	settings := mergeModelSettings(a.modelSettings, cfg.modelSettings)
+	opts = append(opts, settings.toModelOptions()...)
 
 	return opts
 }
@@ -594,22 +560,23 @@ func checkUsageLimits(tracker *UsageTracker, limits *UsageLimits) error {
 	if limits == nil {
 		return nil
 	}
-	if limits.RequestLimit > 0 && tracker.Requests >= limits.RequestLimit {
+	requests, requestTokens, responseTokens, totalTokens := tracker.Snapshot()
+	if limits.RequestLimit > 0 && requests >= limits.RequestLimit {
 		return &UsageLimitExceededError{
 			Message: fmt.Sprintf("request limit %d reached", limits.RequestLimit),
 		}
 	}
-	if limits.RequestTokensLimit > 0 && tracker.RequestTokens >= limits.RequestTokensLimit {
+	if limits.RequestTokensLimit > 0 && requestTokens >= limits.RequestTokensLimit {
 		return &UsageLimitExceededError{
 			Message: fmt.Sprintf("request tokens limit %d reached", limits.RequestTokensLimit),
 		}
 	}
-	if limits.ResponseTokensLimit > 0 && tracker.ResponseTokens >= limits.ResponseTokensLimit {
+	if limits.ResponseTokensLimit > 0 && responseTokens >= limits.ResponseTokensLimit {
 		return &UsageLimitExceededError{
 			Message: fmt.Sprintf("response tokens limit %d reached", limits.ResponseTokensLimit),
 		}
 	}
-	if limits.TotalTokensLimit > 0 && tracker.TotalTokens >= limits.TotalTokensLimit {
+	if limits.TotalTokensLimit > 0 && totalTokens >= limits.TotalTokensLimit {
 		return &UsageLimitExceededError{
 			Message: fmt.Sprintf("total tokens limit %d reached", limits.TotalTokensLimit),
 		}
@@ -627,11 +594,12 @@ func extractNonSystemMessages(messages []*schema.Message, systemCount int) []*sc
 
 // usageFromTracker converts a UsageTracker to a Usage summary.
 func usageFromTracker(tracker *UsageTracker) Usage {
+	requests, requestTokens, responseTokens, totalTokens := tracker.Snapshot()
 	return Usage{
-		Requests:       tracker.Requests,
-		RequestTokens:  tracker.RequestTokens,
-		ResponseTokens: tracker.ResponseTokens,
-		TotalTokens:    tracker.TotalTokens,
+		Requests:       requests,
+		RequestTokens:  requestTokens,
+		ResponseTokens: responseTokens,
+		TotalTokens:    totalTokens,
 	}
 }
 
@@ -643,41 +611,4 @@ func IsModelRetry(err error) (*ErrModelRetry, bool) {
 		return e, true
 	}
 	return nil, false
-}
-
-// Helper type conversion functions.
-func toFloat32(v any) (float32, bool) {
-	switch val := v.(type) {
-	case float32:
-		return val, true
-	case float64:
-		return float32(val), true
-	case int:
-		return float32(val), true
-	case json.Number:
-		f, err := val.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return float32(f), true
-	}
-	return 0, false
-}
-
-func toInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case int64:
-		return int(val), true
-	case float64:
-		return int(val), true
-	case json.Number:
-		n, err := val.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(n), true
-	}
-	return 0, false
 }

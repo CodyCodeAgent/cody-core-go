@@ -18,7 +18,16 @@ type RequestOption func(*requestConfig)
 type requestConfig struct {
 	systemPrompt  string
 	messages      []*schema.Message
-	modelSettings map[string]any
+	modelSettings *ModelSettings
+}
+
+// ModelSettings configures model parameters for direct requests.
+// Use pointer fields to distinguish "not set" from zero values.
+type ModelSettings struct {
+	Temperature *float32
+	MaxTokens   *int
+	TopP        *float32
+	Stop        []string
 }
 
 // WithSystemPrompt sets a system prompt for the request.
@@ -36,9 +45,9 @@ func WithMessages(msgs []*schema.Message) RequestOption {
 }
 
 // WithModelSettings sets model parameters for the request.
-func WithModelSettings(settings map[string]any) RequestOption {
+func WithModelSettings(settings ModelSettings) RequestOption {
 	return func(c *requestConfig) {
-		c.modelSettings = settings
+		c.modelSettings = &settings
 	}
 }
 
@@ -127,52 +136,19 @@ func buildModelOpts(cfg *requestConfig, toolInfos []*schema.ToolInfo) []model.Op
 	if len(toolInfos) > 0 {
 		opts = append(opts, model.WithTools(toolInfos))
 	}
-	if cfg.modelSettings != nil {
-		if v, ok := cfg.modelSettings["temperature"]; ok {
-			if f, ok := toFloat32(v); ok {
-				opts = append(opts, model.WithTemperature(f))
-			}
+	if s := cfg.modelSettings; s != nil {
+		if s.Temperature != nil {
+			opts = append(opts, model.WithTemperature(*s.Temperature))
 		}
-		if v, ok := cfg.modelSettings["max_tokens"]; ok {
-			if n, ok := toInt(v); ok {
-				opts = append(opts, model.WithMaxTokens(n))
-			}
+		if s.MaxTokens != nil {
+			opts = append(opts, model.WithMaxTokens(*s.MaxTokens))
 		}
-		if v, ok := cfg.modelSettings["top_p"]; ok {
-			if f, ok := toFloat32(v); ok {
-				opts = append(opts, model.WithTopP(f))
-			}
+		if s.TopP != nil {
+			opts = append(opts, model.WithTopP(*s.TopP))
 		}
-		if v, ok := cfg.modelSettings["stop"]; ok {
-			if s, ok := v.([]string); ok {
-				opts = append(opts, model.WithStop(s))
-			}
+		if len(s.Stop) > 0 {
+			opts = append(opts, model.WithStop(s.Stop))
 		}
 	}
 	return opts
-}
-
-// Type conversion helpers (consistent with agent package).
-func toFloat32(v any) (float32, bool) {
-	switch val := v.(type) {
-	case float32:
-		return val, true
-	case float64:
-		return float32(val), true
-	case int:
-		return float32(val), true
-	}
-	return 0, false
-}
-
-func toInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case int64:
-		return int(val), true
-	case float64:
-		return int(val), true
-	}
-	return 0, false
 }

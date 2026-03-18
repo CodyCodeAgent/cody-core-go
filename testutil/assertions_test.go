@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
@@ -39,7 +40,7 @@ func TestAssertUserPromptSent(t *testing.T) {
 	AssertUserPromptSent(t, tm, "What is Go?")
 }
 
-func TestContainsString(t *testing.T) {
+func TestStringsContains(t *testing.T) {
 	tests := []struct {
 		s      string
 		substr string
@@ -55,9 +56,9 @@ func TestContainsString(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := containsString(tt.s, tt.substr)
+		got := strings.Contains(tt.s, tt.substr)
 		if got != tt.want {
-			t.Errorf("containsString(%q, %q) = %v, want %v", tt.s, tt.substr, got, tt.want)
+			t.Errorf("strings.Contains(%q, %q) = %v, want %v", tt.s, tt.substr, got, tt.want)
 		}
 	}
 }

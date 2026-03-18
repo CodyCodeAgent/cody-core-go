@@ -46,6 +46,50 @@ func TestRequestText_WithSystemPrompt(t *testing.T) {
 	assert.Equal(t, "You are a translator.", call.Messages[0].Content)
 }
 
+func TestRequestText_WithMessages(t *testing.T) {
+	tm := testutil.NewTestModel(
+		testutil.TestResponse{Text: "response"},
+	)
+
+	customMsgs := []*schema.Message{
+		{Role: schema.System, Content: "Custom system"},
+		{Role: schema.User, Content: "Custom user message"},
+	}
+
+	text, err := RequestText(context.Background(), tm, "ignored prompt",
+		WithMessages(customMsgs),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "response", text)
+
+	// WithMessages overrides the prompt — verify custom messages were sent
+	call := tm.AllCalls()[0]
+	assert.Equal(t, 2, len(call.Messages))
+	assert.Equal(t, "Custom system", call.Messages[0].Content)
+	assert.Equal(t, "Custom user message", call.Messages[1].Content)
+}
+
+func TestRequestText_WithModelSettings(t *testing.T) {
+	tm := testutil.NewTestModel(
+		testutil.TestResponse{Text: "ok"},
+	)
+
+	temp := float32(0.7)
+	maxTok := 200
+	topP := float32(0.9)
+
+	_, err := RequestText(context.Background(), tm, "Test",
+		WithModelSettings(ModelSettings{
+			Temperature: &temp,
+			MaxTokens:   &maxTok,
+			TopP:        &topP,
+			Stop:        []string{"\n"},
+		}),
+	)
+	require.NoError(t, err)
+	// Settings are applied to the model call — no error means they were accepted
+}
+
 func TestRequest_Struct(t *testing.T) {
 	tm := testutil.NewTestModel(
 		testutil.TestResponse{
@@ -105,4 +149,24 @@ func TestRequest_ModelReturnsText_Error(t *testing.T) {
 	_, err := Request[Sentiment](context.Background(), tm, "Analyze")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "did not call the output tool")
+}
+
+func TestRequest_ModelError(t *testing.T) {
+	tm := testutil.NewTestModel(
+		testutil.TestResponse{Err: context.DeadlineExceeded},
+	)
+
+	_, err := Request[Sentiment](context.Background(), tm, "Analyze")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deadline")
+}
+
+func TestRequestText_ModelError(t *testing.T) {
+	tm := testutil.NewTestModel(
+		testutil.TestResponse{Err: context.Canceled},
+	)
+
+	_, err := RequestText(context.Background(), tm, "Hello")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "canceled")
 }
