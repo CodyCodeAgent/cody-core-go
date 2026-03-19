@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `mcp` package: MCP (Model Context Protocol) server integration — connect any MCP server's tools to your agent via `WithMCPServer`
+- `mcp.Connect()` with automatic tool discovery, schema conversion, and pagination
+- `mcp.WithToolFilter` and `mcp.WithClientInfo` server options
+
+### Changed
+
+- **BREAKING**: Minimum Go version bumped from 1.24 to 1.25 (required by MCP SDK dependency)
+
 ## [v0.3.0] - 2026-03-18
 
 ### Changed

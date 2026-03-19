@@ -16,7 +16,7 @@ go test ./agent/...        # Run tests for a single package
 go test ./agent/ -run TestName  # Run a specific test
 ```
 
-All tests use `testutil.TestModel` or `testutil.FunctionModel` — no real API calls or credentials needed. CI runs on every push/PR via GitHub Actions (`.github/workflows/ci.yml`). Requires Go 1.24+.
+All tests use `testutil.TestModel` or `testutil.FunctionModel` — no real API calls or credentials needed. CI runs on every push/PR via GitHub Actions (`.github/workflows/ci.yml`). Requires Go 1.25+.
 
 ## Architecture
 
@@ -28,6 +28,7 @@ This is a **Pydantic AI-style agent framework for Go** built on [cloudwego/eino]
 - **`output/`** — Structured output: JSON schema generation from Go struct tags, output tool creation (`final_result`), parsing (struct and primitive wrapper), validation.
 - **`direct/`** — Lightweight one-shot model calls (`RequestText`, `Request[T]`) without the agent loop, tools, or retries.
 - **`deps/`** — Convenience re-exports of `agent.GetDeps`, `agent.GetRunContext`, and `agent.GetMetadata` for use in Eino tool implementations.
+- **`mcp/`** — MCP (Model Context Protocol) integration. Bridges MCP server tools to Eino `InvokableTool` via JSON Schema round-tripping. Uses `github.com/modelcontextprotocol/go-sdk`.
 - **`testutil/`** — `TestModel` (pre-configured response sequences), `FunctionModel` (custom generate logic), and assertion helpers (`AssertToolCalled`, `AssertToolRegistered`, `AssertSystemPromptContains`, etc.).
 
 ### Key Source Files

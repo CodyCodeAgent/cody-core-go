@@ -12,7 +12,7 @@ A Pydantic AI-style agent framework for Go, built on [cloudwego/eino](https://gi
 go get github.com/CodyCodeAgent/cody-core-go
 ```
 
-Requires Go 1.24+.
+Requires Go 1.25+.
 
 ## Quick Start
 
@@ -281,6 +281,48 @@ sr, _ := conv.SendStream(ctx, "Hello", deps)
 result, _ := sr.Final() // conversation history is automatically updated
 ```
 
+### MCP (Model Context Protocol)
+
+Connect any MCP server's tools to your agent — no custom wrappers needed:
+
+```go
+import mcptools "github.com/CodyCodeAgent/cody-core-go/mcp"
+
+// Stdio transport (local MCP server process)
+transport := mcpsdk.NewCommandTransport(exec.Command("my-mcp-server"))
+server, err := mcptools.Connect(ctx, transport)
+defer server.Close()
+
+// All MCP tools are automatically available to the agent
+a := agent.New[agent.NoDeps, string](chatModel,
+    mcptools.WithMCPServer[agent.NoDeps, string](server),
+)
+```
+
+**HTTP MCP servers** (e.g., Feishu/Lark) with custom headers:
+
+```go
+server, err := mcptools.ConnectHTTP(ctx, "https://mcp.feishu.cn/mcp",
+    []mcptools.HTTPOption{
+        mcptools.WithHeaders(map[string]string{
+            "X-Lark-MCP-UAT":           uat,
+            "X-Lark-MCP-Allowed-Tools": "fetch-doc",
+        }),
+    },
+)
+defer server.Close()
+```
+
+Filter which tools to expose:
+
+```go
+server, _ := mcptools.Connect(ctx, transport,
+    mcptools.WithToolFilter(func(name string) bool {
+        return name != "dangerous_tool"
+    }),
+)
+```
+
 ### Direct Requests
 
 For simple one-shot calls without the agent loop, tools, or retries:
@@ -406,8 +448,9 @@ cody-core-go/
 ├── output/      JSON Schema generation, output tool, validator, parsing
 ├── direct/      One-shot model requests (no agent loop)
 ├── deps/        Convenience re-exports of GetDeps, GetRunContext, GetMetadata
+├── mcp/         MCP server integration (tool discovery + execution)
 ├── testutil/    TestModel, FunctionModel, assertion helpers
-└── examples/    Runnable examples (quickstart, union-types, validator, conversation)
+└── examples/    Runnable examples (quickstart, union-types, validator, conversation, multi-agent)
 ```
 
 ## Contributing
