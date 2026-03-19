@@ -249,13 +249,10 @@ func TestSchemaConversion(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, paramsOneOf)
 
-	// Verify the schema can be used to build ToolInfo.
-	info := &schema.ToolInfo{
-		Name:        "test",
-		Desc:        "test tool",
-		ParamsOneOf: paramsOneOf,
-	}
-	assert.Equal(t, "test", info.Name)
+	// Verify the converted schema produces a valid ToolInfo.
+	js, err2 := paramsOneOf.ToJSONSchema()
+	require.NoError(t, err2)
+	assert.NotNil(t, js)
 }
 
 func TestConvertInputSchema_Nil(t *testing.T) {
@@ -274,7 +271,7 @@ func TestHeaderTransport(t *testing.T) {
 	}
 
 	// Create a test request and verify headers are injected.
-	req, _ := http.NewRequest("POST", "http://localhost/test", nil)
+	req, _ := http.NewRequest("POST", "http://localhost/test", http.NoBody)
 	// We can't actually send the request, but we can verify the RoundTrip
 	// modifies the request headers by wrapping with a checking transport.
 	called := false
